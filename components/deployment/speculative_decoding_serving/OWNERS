@@ -1,9 +1,10 @@
 no_parent_owners: true
 approvers:
-  - szaher
-  - kryanbeane
-  - CathalOConnorRH
+  - ChughShilpa
+  - efazal
+  - hrathina
+  - JaZeeGH
+  - Sridhar1030
 reviewers:
-  - szaher
-  - kryanbeane
-  - CathalOConnorRH
+  - ChughShilpa
+  - hrathina

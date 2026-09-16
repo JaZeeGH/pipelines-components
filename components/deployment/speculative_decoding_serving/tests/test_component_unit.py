@@ -51,10 +51,10 @@ def test_route_403_raises_informative_runtime_error():
     api = mock.MagicMock()
     api.get_namespaced_custom_object.side_effect = [
         {"metadata": {"resourceVersion": "1"}},  # HardwareProfile
-        _api_404(),                               # ServingRuntime upsert check → create
-        _api_404(),                               # InferenceService upsert check → create
-        _ready_isvc(),                            # readiness poll
-        ApiException(status=403),                 # Route upsert GET → 403
+        _api_404(),  # ServingRuntime upsert check → create
+        _api_404(),  # InferenceService upsert check → create
+        _ready_isvc(),  # readiness poll
+        ApiException(status=403),  # Route upsert GET → 403
     ]
     api.create_namespaced_custom_object.return_value = {}
 
@@ -72,7 +72,7 @@ def test_route_non_403_api_exception_propagates():
         _api_404(),
         _api_404(),
         _ready_isvc(),
-        ApiException(status=500),                 # Route upsert GET → 500
+        ApiException(status=500),  # Route upsert GET → 500
     ]
     api.create_namespaced_custom_object.return_value = {}
 
@@ -118,11 +118,11 @@ def test_external_route_creates_route_and_returns_https_url():
     """When enable_external_route=True the component creates an OpenShift Route and returns its HTTPS URL."""
     api = mock.MagicMock()
     api.get_namespaced_custom_object.side_effect = [
-        {"metadata": {"resourceVersion": "1"}},      # HardwareProfile
-        _api_404(),                                   # ServingRuntime upsert check → create
-        _api_404(),                                   # InferenceService upsert check → create
-        _ready_isvc(),                                # readiness poll
-        _api_404(),                                   # Route upsert check → create
+        {"metadata": {"resourceVersion": "1"}},  # HardwareProfile
+        _api_404(),  # ServingRuntime upsert check → create
+        _api_404(),  # InferenceService upsert check → create
+        _ready_isvc(),  # readiness poll
+        _api_404(),  # Route upsert check → create
         {"spec": {"host": "my-model.apps.example.com"}},  # Route host fetch
     ]
     api.create_namespaced_custom_object.return_value = {}
@@ -131,7 +131,8 @@ def test_external_route_creates_route_and_returns_https_url():
 
     assert result == "https://my-model.apps.example.com/v1"
     route_create = [
-        call for call in api.create_namespaced_custom_object.call_args_list
+        call
+        for call in api.create_namespaced_custom_object.call_args_list
         if call.kwargs.get("plural") == "routes" or call.kwargs.get("group") == "route.openshift.io"
     ]
     assert len(route_create) == 1, "Expected exactly one Route to be created"
@@ -230,9 +231,9 @@ def test_trust_remote_code_opt_in_adds_flag():
     api = mock.MagicMock()
     api.get_namespaced_custom_object.side_effect = [
         {"metadata": {"resourceVersion": "1"}},  # HardwareProfile
-        _api_404(),                               # ServingRuntime upsert check → create
-        _api_404(),                               # InferenceService upsert check → create
-        _ready_isvc(),                            # readiness poll
+        _api_404(),  # ServingRuntime upsert check → create
+        _api_404(),  # InferenceService upsert check → create
+        _ready_isvc(),  # readiness poll
     ]
     api.create_namespaced_custom_object.return_value = {}
 

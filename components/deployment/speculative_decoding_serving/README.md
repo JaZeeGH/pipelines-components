@@ -2,31 +2,6 @@
 
 > ⚠️ **Stability: experimental** — This asset is not yet stable and may change.
 
-## Prerequisites
-
-By default the component returns an internal cluster URL
-(`http://<endpoint>-predictor.<namespace>.svc.cluster.local`), which is usable from:
-
-- RHOAI Jupyter workbenches and other pods in the cluster
-- Downstream KFP pipeline components in the same run
-- Your laptop via `oc port-forward svc/<endpoint>-predictor 8080:80 -n <namespace>`
-
-If you set `enable_external_route=True`, the component creates an OpenShift Route
-to expose the endpoint outside the cluster. This requires a one-time admin setup
-because the KFP pipeline runner service account (`pipeline-runner-dspa`) does not
-have permission to create Routes by default:
-
-```bash
-NAMESPACE=<your-rhoai-project-namespace>
-sed "s/<NAMESPACE>/$NAMESPACE/g" \
-  components/deployment/speculative_decoding_serving/rbac.yaml | oc apply -f -
-```
-
-This creates a `Role` and `RoleBinding` granting `pipeline-runner-dspa` permission
-to manage Routes in your namespace. It is a one-time step — no need to repeat it
-for subsequent pipeline runs. If you skip it and run with `enable_external_route=True`,
-the component fails with an error message containing the exact command above.
-
 ## Overview 🧾
 
 Serve a verifier and Eagle3 draft model through one vLLM endpoint.
@@ -43,10 +18,8 @@ under that root; the verifier is the primary ``--model``.
 | `model_cache_pvc` | `str` | `None` | PVC containing both model directories. |
 | `verifier_model_dir` | `str` | `None` | Relative PVC directory containing the verifier model. |
 | `draft_model_dir` | `str` | `None` | Relative PVC directory containing the draft checkpoint. |
-| `runtime_image` | `str` | `registry.redhat.io/rhaiis/vllm-cuda-rhel9@sha256:094db84a1da5e8a575d0c9eade114fa30f4a2061064a338e3e032f3578f8082a` | vLLM CUDA image supporting Eagle3 speculative decoding. |
-| `serving_runtime_name` | `str` | `""` | ServingRuntime name; defaults to ``<endpoint>-runtime``. |
+| `runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:e310f71b5f9424783982e81d8dc4cba657c3e98f17f8512b827d9fa499ac82a3` | vLLM CUDA image supporting Eagle3 speculative decoding. |
 | `hardware_profile_name` | `str` | `gpu-profile` | RHOAI HardwareProfile name, or empty to skip lookup. |
-| `hardware_profile_namespace` | `str` | `redhat-ods-applications` | Namespace containing the HardwareProfile. |
 | `min_replicas` | `int` | `1` | Minimum number of predictor replicas. |
 | `max_replicas` | `int` | `1` | Maximum number of predictor replicas. |
 | `gpu_count` | `int` | `1` | GPUs per predictor; also used as verifier vLLM tensor parallel size. |
@@ -59,14 +32,15 @@ under that root; the verifier is the primary ``--model``.
 | `memory_limits` | `str` | `8Gi` | Predictor memory limit. |
 | `gpu_memory_utilization` | `float` | `0.9` | Fraction of GPU memory available to vLLM. |
 | `max_num_seqs` | `int` | `16` | Maximum concurrent sequences in the vLLM scheduler. |
-| `trust_remote_code` | `bool` | `True` | Pass ``--trust-remote-code`` for the draft checkpoint. |
+| `trust_remote_code` | `bool` | `False` | Pass ``--trust-remote-code`` for the draft checkpoint. |
 | `enable_auth` | `bool` | `False` | Enable RHOAI authentication for the exposed endpoint. |
+| `enable_external_route` | `bool` | `False` | Create an OpenShift Route so the endpoint is reachable outside the cluster. Requires a one-time RBAC setup — see ``rbac.yaml`` in this component's directory. When ``False`` (the default) the internal cluster-local URL is returned, which is usable from any pod in the cluster or via ``oc port-forward``. |
 
 ## Outputs 📤
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| Output | `str` | The OpenAI-compatible ``/v1`` endpoint URL. |
+| Output | `str` | The OpenAI-compatible ``/v1`` endpoint URL (external HTTPS Route URL when ``enable_external_route=True``, internal cluster URL otherwise). |
 
 ## Metadata 🗂️
 
@@ -90,13 +64,14 @@ under that root; the verifier is the primary ``--model``.
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:
-    - szaher
-    - kryanbeane
-    - CathalOConnorRH
+    - ChughShilpa
+    - efazal
+    - hrathina
+    - JaZeeGH
+    - Sridhar1030
   - Reviewers:
-    - szaher
-    - kryanbeane
-    - CathalOConnorRH
+    - ChughShilpa
+    - hrathina
 
 ## Additional Resources 📚
 

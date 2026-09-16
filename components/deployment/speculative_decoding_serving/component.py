@@ -382,7 +382,7 @@ def speculative_decoding_serving(
                             "account lacks permission to manage routes.route.openshift.io "
                             "by default. Apply the one-time RBAC setup before retrying:\n\n"
                             f"  NAMESPACE={namespace}\n"
-                            "  sed \"s/<NAMESPACE>/$NAMESPACE/g\" \\\n"
+                            '  sed "s/<NAMESPACE>/$NAMESPACE/g" \\\n'
                             "    components/deployment/speculative_decoding_serving/"
                             "rbac.yaml | oc apply -f -\n\n"
                             "See the Prerequisites section of the component README for details."
