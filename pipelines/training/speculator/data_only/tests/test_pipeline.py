@@ -12,6 +12,12 @@ class TestSpeculatorDataOnlyPipeline:
         """Test that the pipeline function is defined."""
         assert callable(speculator_data_only_pipeline)
 
+    def test_verifier_model_defaults_empty_for_cached_model_reuse(self):
+        """A pre-downloaded verifier path can be used without a competing HF default."""
+        inputs = speculator_data_only_pipeline.component_spec.inputs
+
+        assert inputs["verifier_model"].default == ""
+
     def test_pipeline_compiles(self, tmp_path):
         """Test that the pipeline compiles successfully."""
         output_path = tmp_path / "pipeline.yaml"

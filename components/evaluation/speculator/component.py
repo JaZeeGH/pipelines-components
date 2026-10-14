@@ -1,6 +1,183 @@
-"""Evaluate speculative decoding acceptance and speedup."""
+"""Benchmark speculative decoding with the upstream Speculators evaluator."""
 
 from kfp import dsl
+
+
+def _resolve_evaluation_dataset_path(uri: str, mount_path: str, persistent_pvc: str = "") -> str:
+    """Resolve a PVC URI or relative dataset path under the mounted PVC."""
+    import os
+
+    path = uri
+    if path.startswith("pvc://"):
+        path = path.removeprefix("pvc://")
+        if persistent_pvc and path == persistent_pvc:
+            path = ""
+        elif persistent_pvc and path.startswith(f"{persistent_pvc}/"):
+            path = path[len(persistent_pvc) + 1 :]
+        elif not persistent_pvc:
+            path = path.split("/", 1)[-1]
+    return path if os.path.isabs(path) else os.path.join(mount_path, path)
+
+
+def _extract_evaluation_prompt(record: object) -> str:
+    """Extract a prompt string from common JSONL chat record shapes."""
+    if isinstance(record, str):
+        return record
+    if not isinstance(record, dict):
+        raise ValueError(f"Unsupported evaluation record type: {type(record).__name__}")
+
+    prompt = record.get("prompt") or record.get("text")
+    if prompt:
+        return str(prompt)
+
+    messages = record.get("messages") or record.get("conversations") or []
+    user_messages = [
+        message
+        for message in messages
+        if isinstance(message, dict) and message.get("role", message.get("from")) in ("user", "human")
+    ]
+    if user_messages:
+        prompt = user_messages[-1].get("content", user_messages[-1].get("value"))
+    if not prompt:
+        raise ValueError("Each evaluation record must contain a prompt or user message")
+    return str(prompt)
+
+
+def _prepare_local_evaluation_dataset(
+    uri: str,
+    mount_path: str,
+    persistent_pvc: str,
+    max_requests: int,
+    sample_seed: int,
+    output_path: str,
+) -> tuple[str, bool, int]:
+    """Normalize a local JSONL file to prompt rows for GuideLLM.
+
+    Returns the original URI unchanged when it is an upstream dataset ID.
+    """
+    import json
+    import random
+    from pathlib import Path
+
+    if not uri:
+        raise ValueError("evaluation_dataset_uri must identify a dataset")
+    if max_requests <= 0:
+        raise ValueError("evaluation_max_samples must be greater than zero")
+
+    direct_path = Path(uri)
+    if uri.startswith("pvc://"):
+        dataset_path = Path(_resolve_evaluation_dataset_path(uri, mount_path, persistent_pvc))
+        if not dataset_path.exists():
+            raise FileNotFoundError(f"Evaluation dataset was not found on the PVC: {dataset_path}")
+    elif direct_path.exists():
+        dataset_path = direct_path
+    else:
+        mounted_path = Path(_resolve_evaluation_dataset_path(uri, mount_path, persistent_pvc))
+        if not mounted_path.exists():
+            return uri, False, 0
+        dataset_path = mounted_path
+
+    if dataset_path.is_dir():
+        candidates = sorted(dataset_path.glob("*.jsonl"))
+        if not candidates:
+            raise ValueError(f"No JSONL dataset found in {dataset_path}")
+        dataset_path = candidates[0]
+    if not dataset_path.is_file():
+        raise ValueError(f"Evaluation dataset is not a JSONL file: {dataset_path}")
+
+    prompts = []
+    with dataset_path.open() as dataset_file:
+        for line_number, line in enumerate(dataset_file, start=1):
+            if not line.strip():
+                continue
+            try:
+                prompts.append(_extract_evaluation_prompt(json.loads(line)))
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(f"Invalid evaluation record on line {line_number}: {exc}") from exc
+    if not prompts:
+        raise ValueError(f"The evaluation dataset contains no prompts: {dataset_path}")
+    if len(prompts) > max_requests:
+        prompts = random.Random(sample_seed).sample(prompts, max_requests)
+
+    normalized_path = Path(output_path)
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    with normalized_path.open("w") as normalized_file:
+        for prompt in prompts:
+            normalized_file.write(json.dumps({"prompt": prompt}, ensure_ascii=False) + "\n")
+    return str(normalized_path), True, len(prompts)
+
+
+def _download_upstream_evaluator(destination: str) -> str:
+    """Download the pinned upstream evaluator and its adjacent Python modules.
+
+    The cluster package index does not publish ``speculators>0.7.1``. The
+    evaluator only imports ``speculators.provenance`` for its best-effort
+    command metadata, so use that exact pinned upstream module as a local
+    compatibility namespace rather than installing an unavailable package.
+    """
+    import urllib.request
+    from pathlib import Path
+
+    revision = "7883cd44264e6958cfc003963e5cdb895eb53bf1"
+    source_dir = Path(destination)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("evaluate.py", "perf_utils.py", "mrcr.py"):
+        url = f"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/scripts/evaluate/{filename}"
+        request = urllib.request.Request(url, headers={"User-Agent": "kfp-speculator-evaluator"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            contents = response.read()
+        if not contents:
+            raise RuntimeError(f"Downloaded an empty upstream evaluation file: {filename}")
+        (source_dir / filename).write_bytes(contents)
+    provenance_package = source_dir / "compat" / "speculators"
+    provenance_package.mkdir(parents=True, exist_ok=True)
+    (provenance_package / "__init__.py").write_text('"""Pinned upstream provenance helper namespace."""\n')
+    provenance_url = (
+        f"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/src/speculators/provenance.py"
+    )
+    provenance_request = urllib.request.Request(
+        provenance_url,
+        headers={"User-Agent": "kfp-speculator-evaluator"},
+    )
+    with urllib.request.urlopen(provenance_request, timeout=60) as response:
+        provenance_contents = response.read()
+    if not provenance_contents:
+        raise RuntimeError("Downloaded an empty upstream provenance helper")
+    (provenance_package / "provenance.py").write_bytes(provenance_contents)
+    return str(source_dir / "evaluate.py")
+
+
+def _build_upstream_evaluate_command(
+    python_executable: str,
+    script_path: str,
+    target: str,
+    dataset: str,
+    subsets: str,
+    output_dir: str,
+    max_requests: int,
+    max_tokens: int,
+    temperature: float,
+) -> list[str]:
+    """Build Fynn's documented ``evaluate.py sweep`` command."""
+    import json
+
+    return [
+        python_executable,
+        script_path,
+        "--target",
+        target,
+        "--dataset",
+        dataset,
+        "--subsets",
+        subsets,
+        "--output-dir",
+        output_dir,
+        "--max-requests",
+        str(max_requests),
+        "--gen-kwargs",
+        json.dumps({"temperature": temperature, "max_tokens": max_tokens}),
+        "sweep",
+    ]
 
 
 @dsl.component(
@@ -8,8 +185,15 @@ from kfp import dsl
         "quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@"
         "sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b"
     ),
-    packages_to_install=["kfp==2.17.0", "requests>=2.32.0"],
+    packages_to_install=["kfp==2.17.0", "requests>=2.32.0", "guidellm~=0.7.1"],
     install_kfp_package=False,
+    additional_funcs=[
+        _resolve_evaluation_dataset_path,
+        _extract_evaluation_prompt,
+        _prepare_local_evaluation_dataset,
+        _download_upstream_evaluator,
+        _build_upstream_evaluate_command,
+    ],
 )
 def evaluate_speculator(
     output_metrics: dsl.Output[dsl.Metrics],
@@ -18,6 +202,7 @@ def evaluate_speculator(
     draft_model_path: str,
     evaluation_dataset_uri: str,
     evaluation_speculator_type: str,
+    evaluation_dataset_pvc: str = "",
     evaluation_max_samples: int = 80,
     evaluation_max_tokens: int = 256,
     evaluation_temperature: float = 0.0,
@@ -25,49 +210,50 @@ def evaluate_speculator(
     evaluation_gpu_memory_utilization: float = 0.9,
     evaluation_port: int = 8000,
     evaluation_startup_timeout_seconds: int = 900,
-    evaluation_request_timeout_seconds: int = 600,
     evaluation_sample_seed: int = 42,
     evaluation_model_mount_path: str = "/mnt/persistent",
     evaluation_dataset_mount_path: str = "/mnt/persistent",
-    evaluation_max_failure_rate: float = 0.1,
 ) -> None:
-    """Evaluate a draft model with verifier-only and speculative vLLM servers.
+    """Run the upstream Speculators performance sweep against a speculative vLLM server.
 
-    The component starts a verifier-only server to establish a latency baseline,
-    then restarts vLLM with the draft model configured for speculative decoding.
-    The evaluation dataset must be a JSONL file referenced by
-    ``evaluation_dataset_uri`` with a ``prompt``, ``messages``, or
-    ``conversations`` field, or a string value on each line. At most
-    ``evaluation_max_samples`` records are selected deterministically. The output Metrics artifact contains
-    ``acceptance_rate``, ``acceptance_length``, and ``speedup`` for Model
-    Registry integration.
+    The component starts vLLM with the verifier and draft model, then runs the
+    pinned upstream ``scripts/evaluate/evaluate.py sweep`` against its OpenAI
+    endpoint. Upstream results (acceptance.csv, perf_results.csv, raw GuideLLM
+    JSON, and provenance) are returned in ``output_results``.
+
+    A local JSONL/PVC dataset may contain prompts, chat messages, or conversation
+    records. Local records are normalized to prompt JSONL and deterministically
+    capped at ``evaluation_max_samples``. A Hugging Face dataset ID is passed
+    directly to the upstream script, using its HumanEval example subset.
 
     Args:
-        output_metrics: KFP Metrics artifact for acceptance and speedup values.
-        output_results: JSON artifact containing raw timing and acceptance results.
-        verifier_model: Local or PVC-relative path to the verifier model.
-        draft_model_path: Local path to the trained draft model on the mounted PVC.
-        evaluation_dataset_uri: Local path or PVC URI (``pvc://<claim>/<path>``) to the evaluation JSONL.
-        evaluation_max_samples: Maximum number of prompts to evaluate.
-        evaluation_max_tokens: Maximum completion tokens per prompt.
-        evaluation_temperature: Sampling temperature sent to both servers.
-        evaluation_num_speculative_tokens: Number of draft tokens proposed per step.
-        evaluation_speculator_type: Speculator method used by the draft checkpoint.
+        output_metrics: KFP metrics for acceptance and sweep performance results.
+        output_results: Directory artifact containing upstream CSVs and raw GuideLLM output.
+        verifier_model: Local or PVC-relative verifier model path.
+        draft_model_path: Local path to the trained draft model.
+        evaluation_dataset_uri: Hugging Face dataset ID or local/PVC JSONL path.
+        evaluation_speculator_type: Speculator method configured on the vLLM server.
+        evaluation_dataset_pvc: PVC name used to resolve ``pvc://`` dataset URIs.
+        evaluation_max_samples: Maximum GuideLLM requests at each sweep point.
+        evaluation_max_tokens: Maximum generation tokens for each request.
+        evaluation_temperature: Sampling temperature passed through to GuideLLM.
+        evaluation_num_speculative_tokens: Number of draft tokens proposed by vLLM.
         evaluation_gpu_memory_utilization: vLLM GPU memory utilization fraction.
-        evaluation_port: Local port used by the temporary vLLM servers.
-        evaluation_startup_timeout_seconds: Maximum time to wait for vLLM startup.
-        evaluation_request_timeout_seconds: Maximum time allowed for one request.
-        evaluation_sample_seed: Seed used for deterministic dataset sampling.
-        evaluation_model_mount_path: Local mount prefix for a relative verifier path.
-        evaluation_dataset_mount_path: Local mount prefix for a relative dataset path.
-        evaluation_max_failure_rate: Maximum allowed request failure fraction.
+        evaluation_port: Local port for the temporary vLLM endpoint.
+        evaluation_startup_timeout_seconds: Maximum wait for the vLLM health endpoint.
+        evaluation_sample_seed: Seed used when sampling a local JSONL dataset.
+        evaluation_model_mount_path: Mount prefix for a relative verifier path.
+        evaluation_dataset_mount_path: Mount prefix for a relative dataset path.
     """
+    import csv
     import json
+    import math
     import os
-    import random
     import shutil
     import signal
     import subprocess
+    import sys
+    import tempfile
     import time
     from pathlib import Path
 
@@ -75,8 +261,11 @@ def evaluate_speculator(
 
     if shutil.which("vllm") is None:
         raise RuntimeError("vllm binary not found - ensure vLLM is installed in the base image")
+    if evaluation_max_samples <= 0:
+        raise ValueError("evaluation_max_samples must be greater than zero")
+    if evaluation_max_tokens <= 0:
+        raise ValueError("evaluation_max_tokens must be greater than zero")
 
-    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
     verifier_path = verifier_model
     if verifier_path.startswith("pvc://"):
         verifier_path = verifier_path.removeprefix("pvc://").split("/", 1)[-1]
@@ -85,70 +274,50 @@ def evaluate_speculator(
     draft_path = draft_model_path
     if not os.path.isabs(draft_path):
         draft_path = os.path.join(evaluation_model_mount_path, draft_path)
-    dataset_path = evaluation_dataset_uri
-    if dataset_path.startswith("pvc://"):
-        dataset_path = dataset_path.removeprefix("pvc://").split("/", 1)[-1]
-    if not os.path.isabs(dataset_path):
-        dataset_path = os.path.join(evaluation_dataset_mount_path, dataset_path)
-    dataset_path = Path(dataset_path)
-    if dataset_path.is_dir():
-        candidates = sorted(dataset_path.glob("*.jsonl"))
-        if not candidates:
-            raise ValueError(f"No JSONL dataset found in {dataset_path}")
-        dataset_path = candidates[0]
+    if not os.path.isdir(verifier_path):
+        raise FileNotFoundError(f"Verifier model directory does not exist: {verifier_path}")
+    if not os.path.isdir(draft_path):
+        raise FileNotFoundError(f"Draft model directory does not exist: {draft_path}")
 
-    prompts = []
-    with dataset_path.open() as dataset_file:
-        for line in dataset_file:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if isinstance(record, str):
-                prompt = record
-            else:
-                prompt = record.get("prompt")
-                if not prompt:
-                    messages = record.get("messages") or record.get("conversations") or []
-                    user_messages = [
-                        message for message in messages if message.get("role", message.get("from")) in ("user", "human")
-                    ]
-                    if user_messages:
-                        prompt = user_messages[-1].get("content", user_messages[-1].get("value"))
-            if not prompt:
-                raise ValueError("Each evaluation record must contain a prompt or user message")
-            prompts.append(prompt)
-    if not prompts:
-        raise ValueError("The evaluation dataset contains no prompts")
-    if evaluation_max_samples <= 0:
-        raise ValueError("evaluation_max_samples must be greater than zero")
-    if evaluation_max_tokens <= 0:
-        raise ValueError("evaluation_max_tokens must be greater than zero")
-    if not 0 <= evaluation_max_failure_rate < 1:
-        raise ValueError("evaluation_max_failure_rate must be in the range [0, 1)")
-    if len(prompts) > evaluation_max_samples:
-        prompts = random.Random(evaluation_sample_seed).sample(prompts, evaluation_max_samples)
+    methods = {"eagle3": "eagle3", "dflash": "dflash", "mtp": "mtp", "peagle": "eagle3"}
+    method = methods.get(evaluation_speculator_type.lower())
+    if method is None:
+        raise ValueError(f"Unsupported evaluation_speculator_type: {evaluation_speculator_type}")
 
+    os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
     endpoint = f"http://127.0.0.1:{evaluation_port}"
-    process = None
+    server_process = None
 
     def stop_server() -> None:
-        nonlocal process
-        if process is None:
+        nonlocal server_process
+        if server_process is None:
             return
-        if process.poll() is None:
+        if server_process.poll() is None:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                os.killpg(server_process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             try:
-                process.wait(timeout=30)
+                server_process.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        process = None
+                server_process.kill()
+                server_process.wait()
+        server_process = None
 
-    def start_server(speculative: bool) -> None:
-        nonlocal process
+    with tempfile.TemporaryDirectory(prefix="speculator-evaluate-") as temp_dir:
+        work_dir = Path(temp_dir)
+        upstream_dir = work_dir / "scripts" / "evaluate"
+        upstream_script = _download_upstream_evaluator(str(upstream_dir))
+        local_dataset_path, is_local_dataset, local_request_count = _prepare_local_evaluation_dataset(
+            evaluation_dataset_uri,
+            evaluation_dataset_mount_path,
+            evaluation_dataset_pvc,
+            evaluation_max_samples,
+            evaluation_sample_seed,
+            str(work_dir / "evaluation_prompts.jsonl"),
+        )
+        subsets = "local" if is_local_dataset else "HumanEval"
+        results_dir = work_dir / "upstream-results"
         command = [
             "vllm",
             "serve",
@@ -159,151 +328,121 @@ def evaluate_speculator(
             str(evaluation_port),
             "--gpu-memory-utilization",
             str(evaluation_gpu_memory_utilization),
+            "--speculative-config",
+            json.dumps(
+                {
+                    "method": method,
+                    "model": draft_path,
+                    "draft_tensor_parallel_size": 1,
+                    "num_speculative_tokens": evaluation_num_speculative_tokens,
+                }
+            ),
         ]
-        if speculative:
-            methods = {"eagle3": "eagle3", "dflash": "dflash", "mtp": "mtp", "peagle": "eagle3"}
-            method = methods.get(evaluation_speculator_type.lower())
-            if method is None:
-                raise ValueError(f"Unsupported evaluation_speculator_type: {evaluation_speculator_type}")
-            command.extend(
-                [
-                    "--speculative-config",
-                    json.dumps(
-                        {
-                            "method": method,
-                            "model": draft_path,
-                            "num_speculative_tokens": evaluation_num_speculative_tokens,
-                        }
-                    ),
-                ]
-            )
-        process = subprocess.Popen(command, start_new_session=True)
-        deadline = time.monotonic() + evaluation_startup_timeout_seconds
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f"vLLM exited during startup with code {process.returncode}")
-            try:
-                response = requests.get(f"{endpoint}/health", timeout=5)
-                if response.ok:
-                    return
-            except requests.RequestException:
-                pass
-            time.sleep(2)
-        raise TimeoutError(f"vLLM did not become ready within {evaluation_startup_timeout_seconds} seconds")
+        evaluate_command = _build_upstream_evaluate_command(
+            sys.executable,
+            upstream_script,
+            f"{endpoint}/v1",
+            local_dataset_path,
+            subsets,
+            str(results_dir),
+            evaluation_max_samples,
+            evaluation_max_tokens,
+            evaluation_temperature,
+        )
 
-    def run_requests(prompt_indices: list[int]) -> tuple[float, int, set[int], dict[int, float]]:
-        output_tokens = 0
-        successful_indices = set()
-        request_durations = {}
-        failures = 0
-        for index in prompt_indices:
-            started = time.perf_counter()
-            try:
-                response = requests.post(
-                    f"{endpoint}/v1/completions",
-                    json={
-                        "model": verifier_path,
-                        "prompt": prompts[index],
-                        "max_tokens": evaluation_max_tokens,
-                        "temperature": evaluation_temperature,
-                    },
-                    timeout=evaluation_request_timeout_seconds,
+        try:
+            server_process = subprocess.Popen(command, start_new_session=True)
+            deadline = time.monotonic() + evaluation_startup_timeout_seconds
+            while time.monotonic() < deadline:
+                if server_process.poll() is not None:
+                    raise RuntimeError(f"Speculative vLLM exited during startup with code {server_process.returncode}")
+                try:
+                    response = requests.get(f"{endpoint}/health", timeout=5)
+                    if response.ok:
+                        break
+                except requests.RequestException:
+                    pass
+                time.sleep(2)
+            else:
+                raise TimeoutError(
+                    f"Speculative vLLM did not become ready within {evaluation_startup_timeout_seconds} seconds"
                 )
-                response.raise_for_status()
-                usage = response.json().get("usage", {})
-            except requests.RequestException as exc:
-                failures += 1
-                print(f"Evaluation request {index} failed: {exc}", flush=True)
-                continue
-            successful_indices.add(index)
-            request_durations[index] = time.perf_counter() - started
-            output_tokens += int(usage.get("completion_tokens", 0))
-        attempted = len(prompt_indices)
-        if attempted and failures / attempted > evaluation_max_failure_rate:
-            raise RuntimeError(
-                f"Evaluation failure rate {failures / attempted:.1%} exceeded "
-                f"the allowed {evaluation_max_failure_rate:.1%}"
+
+            dataset_description = (
+                f"local dataset ({local_request_count} prompts)" if is_local_dataset else evaluation_dataset_uri
             )
-        return sum(request_durations.values()), output_tokens, successful_indices, request_durations
-
-    def read_speculative_metrics() -> dict[str, float]:
-        response = requests.get(f"{endpoint}/metrics", timeout=30)
-        response.raise_for_status()
-        counters = {}
-        for line in response.text.splitlines():
-            if line.startswith("#") or "vllm:spec_decode" not in line:
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            metric, value_str = parts[0], parts[1]
-            metric = metric.split("{", 1)[0].removesuffix("_total")
-            try:
-                counters[metric] = counters.get(metric, 0.0) + float(value_str)
-            except ValueError:
-                continue
-        draft_tokens = counters.get("vllm:spec_decode_num_draft_tokens", 0.0)
-        accepted_tokens = counters.get("vllm:spec_decode_num_accepted_tokens", 0.0)
-        drafts = counters.get("vllm:spec_decode_num_drafts", 0.0)
-        required_counters = (
-            "vllm:spec_decode_num_drafts",
-            "vllm:spec_decode_num_draft_tokens",
-            "vllm:spec_decode_num_accepted_tokens",
-        )
-        missing_counters = [name for name in required_counters if name not in counters]
-        if missing_counters:
-            preview = response.text[:1000].replace("\n", "\\n")
-            raise RuntimeError(
-                f"vLLM speculative-decoding counters are missing: {missing_counters}. "
-                f"Raw /metrics response preview: {preview!r}"
+            print(
+                f"Running upstream Speculators evaluation at commit 7883cd44264e6958cfc003963e5cdb895eb53bf1: "
+                f"{dataset_description}",
+                flush=True,
             )
-        return {
-            "num_drafts": drafts,
-            "num_draft_tokens": draft_tokens,
-            "num_accepted_tokens": accepted_tokens,
-            "acceptance_rate": accepted_tokens / draft_tokens if draft_tokens else 0.0,
-            "acceptance_length": 1.0 + accepted_tokens / drafts if drafts else 0.0,
-        }
+            evaluator_environment = os.environ.copy()
+            compat_path = str(upstream_dir / "compat")
+            existing_pythonpath = evaluator_environment.get("PYTHONPATH")
+            evaluator_environment["PYTHONPATH"] = (
+                compat_path if not existing_pythonpath else f"{compat_path}{os.pathsep}{existing_pythonpath}"
+            )
+            subprocess.run(evaluate_command, check=True, env=evaluator_environment)
+        finally:
+            stop_server()
 
-    try:
-        start_server(speculative=False)
-        baseline_seconds, baseline_tokens, baseline_successful, baseline_durations = run_requests(
-            list(range(len(prompts)))
-        )
-        stop_server()
+        acceptance_path = results_dir / "acceptance.csv"
+        if not acceptance_path.is_file():
+            raise RuntimeError(f"Upstream evaluator did not produce {acceptance_path}")
+        with acceptance_path.open(newline="") as acceptance_file:
+            acceptance_rows = list(csv.DictReader(acceptance_file))
+        if not acceptance_rows:
+            raise RuntimeError("Upstream evaluator produced an empty acceptance.csv")
 
-        start_server(speculative=True)
-        speculative_seconds, speculative_tokens, speculative_successful, speculative_durations = run_requests(
-            sorted(baseline_successful)
-        )
-        spec_metrics = read_speculative_metrics()
-    finally:
-        stop_server()
+        total_drafts = sum(float(row.get("num_drafts") or 0) for row in acceptance_rows)
+        total_draft_tokens = sum(float(row.get("num_draft_tokens") or 0) for row in acceptance_rows)
+        total_accepted_tokens = sum(float(row.get("num_accepted_tokens") or 0) for row in acceptance_rows)
+        if total_drafts > 0:
+            output_metrics.log_metric("acceptance_length", 1.0 + total_accepted_tokens / total_drafts)
+            output_metrics.log_metric("num_drafts", total_drafts)
+        if total_draft_tokens > 0:
+            output_metrics.log_metric("acceptance_rate", total_accepted_tokens / total_draft_tokens)
+            output_metrics.log_metric("num_draft_tokens", total_draft_tokens)
+            output_metrics.log_metric("num_accepted_tokens", total_accepted_tokens)
+        for position in range(100):
+            column = f"acceptance_at_pos_{position}"
+            if not any(column in row for row in acceptance_rows):
+                break
+            weighted = sum(float(row.get(column) or 0) * float(row.get("num_drafts") or 0) for row in acceptance_rows)
+            if total_drafts > 0:
+                output_metrics.log_metric(column, weighted / total_drafts)
 
-    comparable_indices = baseline_successful & speculative_successful
-    if not comparable_indices:
-        raise RuntimeError("No prompts completed successfully in both evaluation runs")
-    baseline_seconds = sum(baseline_durations[index] for index in comparable_indices)
-    speculative_seconds = sum(speculative_durations[index] for index in comparable_indices)
-    speedup = baseline_seconds / speculative_seconds if speculative_seconds > 0 else 0.0
-    if speedup > 100:
-        print(
-            f"WARNING: calculated speedup {speedup:.2f}x exceeds the sanity bound; "
-            "check evaluation timings and request configuration",
-            flush=True,
-        )
-    results = {
-        **spec_metrics,
-        "baseline_seconds": baseline_seconds,
-        "speculative_seconds": speculative_seconds,
-        "baseline_output_tokens": baseline_tokens,
-        "speculative_output_tokens": speculative_tokens,
-        "speedup": speedup,
-        "requests": len(comparable_indices),
-        "baseline_failures": len(prompts) - len(baseline_successful),
-        "speculative_failures": len(baseline_successful) - len(speculative_successful),
-    }
-    with Path(output_results.path).open("w") as results_file:
-        json.dump(results, results_file, indent=2)
-    for name in ("acceptance_rate", "acceptance_length", "speedup"):
-        output_metrics.log_metric(name, results[name])
+        performance_path = results_dir / "perf_results.csv"
+        if performance_path.is_file():
+            with performance_path.open(newline="") as performance_file:
+                performance_rows = list(csv.DictReader(performance_file))
+            metric_columns = {
+                "rps_median": ("max_requests_per_second", max),
+                "output_tps_median": ("max_output_tokens_per_second", max),
+                "latency_median_s": ("min_latency_median_seconds", min),
+                "itl_median_ms": ("min_inter_token_latency_milliseconds", min),
+                "ttft_median_ms": ("min_time_to_first_token_milliseconds", min),
+            }
+            for column, (metric_name, selector) in metric_columns.items():
+                values = []
+                for row in performance_rows:
+                    try:
+                        value = float(row.get(column, ""))
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(value):
+                        values.append(value)
+                if values:
+                    output_metrics.log_metric(metric_name, selector(values))
+
+        artifact_path = Path(output_results.path)
+        if artifact_path.exists() and artifact_path.is_file():
+            artifact_path.unlink()
+        shutil.copytree(results_dir, artifact_path, dirs_exist_ok=True)
+        output_results.name = "speculator-performance-evaluation"
+        output_results.metadata["evaluation_tool"] = "vllm-project/speculators/scripts/evaluate/evaluate.py"
+        output_results.metadata["evaluation_tool_revision"] = "7883cd44264e6958cfc003963e5cdb895eb53bf1"
+        output_results.metadata["evaluation_mode"] = "sweep"
+        output_results.metadata["evaluation_dataset"] = evaluation_dataset_uri
+        output_results.metadata["evaluation_subsets"] = subsets
+        output_results.metadata["evaluation_max_samples"] = evaluation_max_samples

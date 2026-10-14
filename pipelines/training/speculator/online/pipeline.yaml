@@ -1,18 +1,17 @@
 # PIPELINE DEFINITION
 # Name: speculator-online-pipeline
-# Description: Train a Speculator model with managed vLLM in online mode.
+# Description: Train and evaluate a Speculator model, then serve it with vLLM.
 # Inputs:
 #    data_extraction_concurrency: int [Default: 4.0]
 #    data_extraction_max_samples: int [Default: 16.0]
 #    data_extraction_regenerate_responses: bool [Default: False]
 #    dataset_name: str [Default: 'ultrachat']
 #    enable_progression_tracking: bool [Default: True]
-#    evaluation_dataset_uri: str
+#    evaluation_dataset_uri: str [Default: 'RedHatAI/speculator_benchmarks']
 #    evaluation_gpu_memory_utilization: float [Default: 0.9]
-#    evaluation_max_samples: int [Default: 20.0]
+#    evaluation_max_samples: int [Default: 80.0]
 #    evaluation_max_tokens: int [Default: 256.0]
 #    evaluation_num_speculative_tokens: int [Default: 5.0]
-#    evaluation_request_timeout_seconds: int [Default: 600.0]
 #    evaluation_sample_seed: int [Default: 42.0]
 #    evaluation_startup_timeout_seconds: int [Default: 900.0]
 #    evaluation_temperature: float [Default: 0.0]
@@ -22,6 +21,9 @@
 #    packages_to_install: str [Default: '']
 #    persistent_pvc: str
 #    pip_index_urls: str [Default: '']
+#    serving_endpoint_name: str [Default: 'speculator-online']
+#    serving_namespace: str
+#    serving_runtime_image: str
 #    speculator_type: str [Default: 'eagle3']
 #    target_layer_ids: str [Default: '']
 #    total_seq_len: int [Default: 2048.0]
@@ -84,15 +86,20 @@ components:
     inputDefinitions:
       parameters:
         draft_model_path:
-          description: Local path to the trained draft model on the mounted PVC.
+          description: Local path to the trained draft model.
           parameterType: STRING
         evaluation_dataset_mount_path:
           defaultValue: /mnt/persistent
-          description: Local mount prefix for a relative dataset path.
+          description: Mount prefix for a relative dataset path.
+          isOptional: true
+          parameterType: STRING
+        evaluation_dataset_pvc:
+          defaultValue: ''
+          description: PVC name used to resolve ``pvc://`` dataset URIs.
           isOptional: true
           parameterType: STRING
         evaluation_dataset_uri:
-          description: Local or PVC-relative path to the evaluation JSONL.
+          description: Hugging Face dataset ID or local/PVC JSONL path.
           parameterType: STRING
         evaluation_gpu_memory_utilization:
           defaultValue: 0.9
@@ -101,54 +108,49 @@ components:
           parameterType: NUMBER_DOUBLE
         evaluation_max_samples:
           defaultValue: 80.0
-          description: Maximum number of prompts to evaluate.
+          description: Maximum GuideLLM requests at each sweep point.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_max_tokens:
           defaultValue: 256.0
-          description: Maximum completion tokens per prompt.
+          description: Maximum generation tokens for each request.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_model_mount_path:
           defaultValue: /mnt/persistent
-          description: Local mount prefix for a relative verifier path.
+          description: Mount prefix for a relative verifier path.
           isOptional: true
           parameterType: STRING
         evaluation_num_speculative_tokens:
           defaultValue: 5.0
-          description: Number of draft tokens proposed per step.
+          description: Number of draft tokens proposed by vLLM.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_port:
           defaultValue: 8000.0
-          description: Local port used by the temporary vLLM servers.
-          isOptional: true
-          parameterType: NUMBER_INTEGER
-        evaluation_request_timeout_seconds:
-          defaultValue: 600.0
-          description: Maximum time allowed for one request.
+          description: Local port for the temporary vLLM endpoint.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_sample_seed:
           defaultValue: 42.0
-          description: Seed used for deterministic dataset sampling.
+          description: Seed used when sampling a local JSONL dataset.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_speculator_type:
-          description: Speculator method used by the draft checkpoint.
+          description: Speculator method configured on the vLLM server.
           parameterType: STRING
         evaluation_startup_timeout_seconds:
           defaultValue: 900.0
-          description: Maximum time to wait for vLLM startup.
+          description: Maximum wait for the vLLM health endpoint.
           isOptional: true
           parameterType: NUMBER_INTEGER
         evaluation_temperature:
           defaultValue: 0.0
-          description: Sampling temperature sent to both servers.
+          description: Sampling temperature passed through to GuideLLM.
           isOptional: true
           parameterType: NUMBER_DOUBLE
         verifier_model:
-          description: Local or PVC-relative path to the verifier model.
+          description: Local or PVC-relative verifier model path.
           parameterType: STRING
     outputDefinitions:
       artifacts:
@@ -352,6 +354,117 @@ components:
       field: ENV
     - applyToTask: true
       field: KUBERNETES_VOLUMES
+  comp-speculative-decoding-serving:
+    executorLabel: exec-speculative-decoding-serving
+    inputDefinitions:
+      parameters:
+        cpu_limits:
+          defaultValue: '2'
+          description: Predictor CPU limit.
+          isOptional: true
+          parameterType: STRING
+        cpu_requests:
+          defaultValue: '2'
+          description: Predictor CPU request.
+          isOptional: true
+          parameterType: STRING
+        draft_model_dir:
+          description: Relative PVC directory containing the draft checkpoint.
+          parameterType: STRING
+        draft_tensor_parallel_size:
+          defaultValue: 1.0
+          description: vLLM tensor parallel size for the draft model.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        enable_auth:
+          defaultValue: false
+          description: Enable RHOAI authentication for the exposed endpoint.
+          isOptional: true
+          parameterType: BOOLEAN
+        enable_external_route:
+          defaultValue: false
+          description: "Create an OpenShift Route so the endpoint is reachable\noutside\
+            \ the cluster. Requires a one-time RBAC setup \u2014 see ``rbac.yaml``\
+            \ in\nthis component's directory. When ``False`` (the default) the internal\n\
+            cluster-local URL is returned, which is usable from any pod in the cluster\n\
+            or via ``oc port-forward``."
+          isOptional: true
+          parameterType: BOOLEAN
+        endpoint_name:
+          description: DNS-compatible InferenceService name.
+          parameterType: STRING
+        gpu_count:
+          defaultValue: 1.0
+          description: GPUs per predictor; also used as verifier vLLM tensor parallel
+            size.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        gpu_memory_utilization:
+          defaultValue: 0.9
+          description: Fraction of GPU memory available to vLLM.
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        hardware_profile_name:
+          defaultValue: gpu-profile
+          description: RHOAI HardwareProfile name, or empty to skip lookup.
+          isOptional: true
+          parameterType: STRING
+        max_model_len:
+          defaultValue: 4096.0
+          description: Maximum verifier context length.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        max_num_seqs:
+          defaultValue: 16.0
+          description: Maximum concurrent sequences in the vLLM scheduler.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        max_replicas:
+          defaultValue: 1.0
+          description: Maximum number of predictor replicas.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        memory_limits:
+          defaultValue: 8Gi
+          description: Predictor memory limit.
+          isOptional: true
+          parameterType: STRING
+        memory_requests:
+          defaultValue: 8Gi
+          description: Predictor memory request.
+          isOptional: true
+          parameterType: STRING
+        min_replicas:
+          defaultValue: 1.0
+          description: Minimum number of predictor replicas.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        model_cache_pvc:
+          description: PVC containing both model directories.
+          parameterType: STRING
+        namespace:
+          description: Namespace in which to create the KServe resources.
+          parameterType: STRING
+        num_speculative_tokens:
+          defaultValue: 3.0
+          description: Number of draft tokens proposed per step.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        runtime_image:
+          description: vLLM CUDA image supporting Eagle3 speculative decoding.
+          parameterType: STRING
+        trust_remote_code:
+          defaultValue: false
+          description: Pass ``--trust-remote-code`` for the draft checkpoint.
+          isOptional: true
+          parameterType: BOOLEAN
+        verifier_model_dir:
+          description: Relative PVC directory containing the verifier model.
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
 deploymentSpec:
   executors:
     exec-download-model:
@@ -420,7 +533,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
-          \ 'requests>=2.32.0' && \"$0\" \"$@\"\n"
+          \ 'requests>=2.32.0' 'guidellm~=0.7.1' && \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -432,145 +545,259 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef evaluate_speculator(\n    output_metrics: dsl.Output[dsl.Metrics],\n\
-          \    output_results: dsl.Output[dsl.Artifact],\n    verifier_model: str,\n\
-          \    draft_model_path: str,\n    evaluation_dataset_uri: str,\n    evaluation_speculator_type:\
-          \ str,\n    evaluation_max_samples: int = 80,\n    evaluation_max_tokens:\
+          \ *\n\ndef _resolve_evaluation_dataset_path(uri: str, mount_path: str, persistent_pvc:\
+          \ str = \"\") -> str:\n    \"\"\"Resolve a PVC URI or relative dataset path\
+          \ under the mounted PVC.\"\"\"\n    import os\n\n    path = uri\n    if\
+          \ path.startswith(\"pvc://\"):\n        path = path.removeprefix(\"pvc://\"\
+          )\n        if persistent_pvc and path == persistent_pvc:\n            path\
+          \ = \"\"\n        elif persistent_pvc and path.startswith(f\"{persistent_pvc}/\"\
+          ):\n            path = path[len(persistent_pvc) + 1 :]\n        elif not\
+          \ persistent_pvc:\n            path = path.split(\"/\", 1)[-1]\n    return\
+          \ path if os.path.isabs(path) else os.path.join(mount_path, path)\n\n\n\
+          def _extract_evaluation_prompt(record: object) -> str:\n    \"\"\"Extract\
+          \ a prompt string from common JSONL chat record shapes.\"\"\"\n    if isinstance(record,\
+          \ str):\n        return record\n    if not isinstance(record, dict):\n \
+          \       raise ValueError(f\"Unsupported evaluation record type: {type(record).__name__}\"\
+          )\n\n    prompt = record.get(\"prompt\") or record.get(\"text\")\n    if\
+          \ prompt:\n        return str(prompt)\n\n    messages = record.get(\"messages\"\
+          ) or record.get(\"conversations\") or []\n    user_messages = [\n      \
+          \  message\n        for message in messages\n        if isinstance(message,\
+          \ dict) and message.get(\"role\", message.get(\"from\")) in (\"user\", \"\
+          human\")\n    ]\n    if user_messages:\n        prompt = user_messages[-1].get(\"\
+          content\", user_messages[-1].get(\"value\"))\n    if not prompt:\n     \
+          \   raise ValueError(\"Each evaluation record must contain a prompt or user\
+          \ message\")\n    return str(prompt)\n\n\ndef _prepare_local_evaluation_dataset(\n\
+          \    uri: str,\n    mount_path: str,\n    persistent_pvc: str,\n    max_requests:\
+          \ int,\n    sample_seed: int,\n    output_path: str,\n) -> tuple[str, bool,\
+          \ int]:\n    \"\"\"Normalize a local JSONL file to prompt rows for GuideLLM.\n\
+          \n    Returns the original URI unchanged when it is an upstream dataset\
+          \ ID.\n    \"\"\"\n    import json\n    import random\n    from pathlib\
+          \ import Path\n\n    if not uri:\n        raise ValueError(\"evaluation_dataset_uri\
+          \ must identify a dataset\")\n    if max_requests <= 0:\n        raise ValueError(\"\
+          evaluation_max_samples must be greater than zero\")\n\n    direct_path =\
+          \ Path(uri)\n    if uri.startswith(\"pvc://\"):\n        dataset_path =\
+          \ Path(_resolve_evaluation_dataset_path(uri, mount_path, persistent_pvc))\n\
+          \        if not dataset_path.exists():\n            raise FileNotFoundError(f\"\
+          Evaluation dataset was not found on the PVC: {dataset_path}\")\n    elif\
+          \ direct_path.exists():\n        dataset_path = direct_path\n    else:\n\
+          \        mounted_path = Path(_resolve_evaluation_dataset_path(uri, mount_path,\
+          \ persistent_pvc))\n        if not mounted_path.exists():\n            return\
+          \ uri, False, 0\n        dataset_path = mounted_path\n\n    if dataset_path.is_dir():\n\
+          \        candidates = sorted(dataset_path.glob(\"*.jsonl\"))\n        if\
+          \ not candidates:\n            raise ValueError(f\"No JSONL dataset found\
+          \ in {dataset_path}\")\n        dataset_path = candidates[0]\n    if not\
+          \ dataset_path.is_file():\n        raise ValueError(f\"Evaluation dataset\
+          \ is not a JSONL file: {dataset_path}\")\n\n    prompts = []\n    with dataset_path.open()\
+          \ as dataset_file:\n        for line_number, line in enumerate(dataset_file,\
+          \ start=1):\n            if not line.strip():\n                continue\n\
+          \            try:\n                prompts.append(_extract_evaluation_prompt(json.loads(line)))\n\
+          \            except (json.JSONDecodeError, ValueError) as exc:\n       \
+          \         raise ValueError(f\"Invalid evaluation record on line {line_number}:\
+          \ {exc}\") from exc\n    if not prompts:\n        raise ValueError(f\"The\
+          \ evaluation dataset contains no prompts: {dataset_path}\")\n    if len(prompts)\
+          \ > max_requests:\n        prompts = random.Random(sample_seed).sample(prompts,\
+          \ max_requests)\n\n    normalized_path = Path(output_path)\n    normalized_path.parent.mkdir(parents=True,\
+          \ exist_ok=True)\n    with normalized_path.open(\"w\") as normalized_file:\n\
+          \        for prompt in prompts:\n            normalized_file.write(json.dumps({\"\
+          prompt\": prompt}, ensure_ascii=False) + \"\\n\")\n    return str(normalized_path),\
+          \ True, len(prompts)\n\n\ndef _download_upstream_evaluator(destination:\
+          \ str) -> str:\n    \"\"\"Download the pinned upstream evaluator and its\
+          \ adjacent Python modules.\n\n    The cluster package index does not publish\
+          \ ``speculators>0.7.1``. The\n    evaluator only imports ``speculators.provenance``\
+          \ for its best-effort\n    command metadata, so use that exact pinned upstream\
+          \ module as a local\n    compatibility namespace rather than installing\
+          \ an unavailable package.\n    \"\"\"\n    import urllib.request\n    from\
+          \ pathlib import Path\n\n    revision = \"7883cd44264e6958cfc003963e5cdb895eb53bf1\"\
+          \n    source_dir = Path(destination)\n    source_dir.mkdir(parents=True,\
+          \ exist_ok=True)\n    for filename in (\"evaluate.py\", \"perf_utils.py\"\
+          , \"mrcr.py\"):\n        url = f\"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/scripts/evaluate/{filename}\"\
+          \n        request = urllib.request.Request(url, headers={\"User-Agent\"\
+          : \"kfp-speculator-evaluator\"})\n        with urllib.request.urlopen(request,\
+          \ timeout=60) as response:\n            contents = response.read()\n   \
+          \     if not contents:\n            raise RuntimeError(f\"Downloaded an\
+          \ empty upstream evaluation file: {filename}\")\n        (source_dir / filename).write_bytes(contents)\n\
+          \    provenance_package = source_dir / \"compat\" / \"speculators\"\n  \
+          \  provenance_package.mkdir(parents=True, exist_ok=True)\n    (provenance_package\
+          \ / \"__init__.py\").write_text('\"\"\"Pinned upstream provenance helper\
+          \ namespace.\"\"\"\\n')\n    provenance_url = (\n        f\"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/src/speculators/provenance.py\"\
+          \n    )\n    provenance_request = urllib.request.Request(\n        provenance_url,\n\
+          \        headers={\"User-Agent\": \"kfp-speculator-evaluator\"},\n    )\n\
+          \    with urllib.request.urlopen(provenance_request, timeout=60) as response:\n\
+          \        provenance_contents = response.read()\n    if not provenance_contents:\n\
+          \        raise RuntimeError(\"Downloaded an empty upstream provenance helper\"\
+          )\n    (provenance_package / \"provenance.py\").write_bytes(provenance_contents)\n\
+          \    return str(source_dir / \"evaluate.py\")\n\n\ndef _build_upstream_evaluate_command(\n\
+          \    python_executable: str,\n    script_path: str,\n    target: str,\n\
+          \    dataset: str,\n    subsets: str,\n    output_dir: str,\n    max_requests:\
+          \ int,\n    max_tokens: int,\n    temperature: float,\n) -> list[str]:\n\
+          \    \"\"\"Build Fynn's documented ``evaluate.py sweep`` command.\"\"\"\n\
+          \    import json\n\n    return [\n        python_executable,\n        script_path,\n\
+          \        \"--target\",\n        target,\n        \"--dataset\",\n      \
+          \  dataset,\n        \"--subsets\",\n        subsets,\n        \"--output-dir\"\
+          ,\n        output_dir,\n        \"--max-requests\",\n        str(max_requests),\n\
+          \        \"--gen-kwargs\",\n        json.dumps({\"temperature\": temperature,\
+          \ \"max_tokens\": max_tokens}),\n        \"sweep\",\n    ]\n\n\ndef evaluate_speculator(\n\
+          \    output_metrics: dsl.Output[dsl.Metrics],\n    output_results: dsl.Output[dsl.Artifact],\n\
+          \    verifier_model: str,\n    draft_model_path: str,\n    evaluation_dataset_uri:\
+          \ str,\n    evaluation_speculator_type: str,\n    evaluation_dataset_pvc:\
+          \ str = \"\",\n    evaluation_max_samples: int = 80,\n    evaluation_max_tokens:\
           \ int = 256,\n    evaluation_temperature: float = 0.0,\n    evaluation_num_speculative_tokens:\
           \ int = 5,\n    evaluation_gpu_memory_utilization: float = 0.9,\n    evaluation_port:\
-          \ int = 8000,\n    evaluation_startup_timeout_seconds: int = 900,\n    evaluation_request_timeout_seconds:\
-          \ int = 600,\n    evaluation_sample_seed: int = 42,\n    evaluation_model_mount_path:\
-          \ str = \"/mnt/persistent\",\n    evaluation_dataset_mount_path: str = \"\
-          /mnt/persistent\",\n) -> None:\n    \"\"\"Evaluate a draft model with verifier-only\
-          \ and speculative vLLM servers.\n\n    The component starts a verifier-only\
-          \ server to establish a latency baseline,\n    then restarts vLLM with the\
-          \ draft model configured for speculative decoding.\n    The evaluation dataset\
-          \ must be a JSONL file referenced by\n    ``evaluation_dataset_uri`` with\
-          \ a ``prompt``, ``messages``, or\n    ``conversations`` field, or a string\
-          \ value on each line. At most\n    ``evaluation_max_samples`` records are\
-          \ selected deterministically. The output Metrics artifact contains\n   \
-          \ ``acceptance_rate``, ``acceptance_length``, and ``speedup`` for Model\n\
-          \    Registry integration.\n\n    Args:\n        output_metrics: KFP Metrics\
-          \ artifact for acceptance and speedup values.\n        output_results: JSON\
-          \ artifact containing raw timing and acceptance results.\n        verifier_model:\
-          \ Local or PVC-relative path to the verifier model.\n        draft_model_path:\
-          \ Local path to the trained draft model on the mounted PVC.\n        evaluation_dataset_uri:\
-          \ Local or PVC-relative path to the evaluation JSONL.\n        evaluation_max_samples:\
-          \ Maximum number of prompts to evaluate.\n        evaluation_max_tokens:\
-          \ Maximum completion tokens per prompt.\n        evaluation_temperature:\
-          \ Sampling temperature sent to both servers.\n        evaluation_num_speculative_tokens:\
-          \ Number of draft tokens proposed per step.\n        evaluation_speculator_type:\
-          \ Speculator method used by the draft checkpoint.\n        evaluation_gpu_memory_utilization:\
+          \ int = 8000,\n    evaluation_startup_timeout_seconds: int = 900,\n    evaluation_sample_seed:\
+          \ int = 42,\n    evaluation_model_mount_path: str = \"/mnt/persistent\"\
+          ,\n    evaluation_dataset_mount_path: str = \"/mnt/persistent\",\n) -> None:\n\
+          \    \"\"\"Run the upstream Speculators performance sweep against a speculative\
+          \ vLLM server.\n\n    The component starts vLLM with the verifier and draft\
+          \ model, then runs the\n    pinned upstream ``scripts/evaluate/evaluate.py\
+          \ sweep`` against its OpenAI\n    endpoint. Upstream results (acceptance.csv,\
+          \ perf_results.csv, raw GuideLLM\n    JSON, and provenance) are returned\
+          \ in ``output_results``.\n\n    A local JSONL/PVC dataset may contain prompts,\
+          \ chat messages, or conversation\n    records. Local records are normalized\
+          \ to prompt JSONL and deterministically\n    capped at ``evaluation_max_samples``.\
+          \ A Hugging Face dataset ID is passed\n    directly to the upstream script,\
+          \ using its HumanEval example subset.\n\n    Args:\n        output_metrics:\
+          \ KFP metrics for acceptance and sweep performance results.\n        output_results:\
+          \ Directory artifact containing upstream CSVs and raw GuideLLM output.\n\
+          \        verifier_model: Local or PVC-relative verifier model path.\n  \
+          \      draft_model_path: Local path to the trained draft model.\n      \
+          \  evaluation_dataset_uri: Hugging Face dataset ID or local/PVC JSONL path.\n\
+          \        evaluation_speculator_type: Speculator method configured on the\
+          \ vLLM server.\n        evaluation_dataset_pvc: PVC name used to resolve\
+          \ ``pvc://`` dataset URIs.\n        evaluation_max_samples: Maximum GuideLLM\
+          \ requests at each sweep point.\n        evaluation_max_tokens: Maximum\
+          \ generation tokens for each request.\n        evaluation_temperature: Sampling\
+          \ temperature passed through to GuideLLM.\n        evaluation_num_speculative_tokens:\
+          \ Number of draft tokens proposed by vLLM.\n        evaluation_gpu_memory_utilization:\
           \ vLLM GPU memory utilization fraction.\n        evaluation_port: Local\
-          \ port used by the temporary vLLM servers.\n        evaluation_startup_timeout_seconds:\
-          \ Maximum time to wait for vLLM startup.\n        evaluation_request_timeout_seconds:\
-          \ Maximum time allowed for one request.\n        evaluation_sample_seed:\
-          \ Seed used for deterministic dataset sampling.\n        evaluation_model_mount_path:\
-          \ Local mount prefix for a relative verifier path.\n        evaluation_dataset_mount_path:\
-          \ Local mount prefix for a relative dataset path.\n    \"\"\"\n    import\
-          \ json\n    import os\n    import random\n    import signal\n    import\
-          \ subprocess\n    import time\n    from pathlib import Path\n\n    import\
-          \ requests\n\n    os.environ[\"VLLM_WORKER_MULTIPROC_METHOD\"] = \"spawn\"\
-          \n    verifier_path = verifier_model\n    if verifier_path.startswith(\"\
+          \ port for the temporary vLLM endpoint.\n        evaluation_startup_timeout_seconds:\
+          \ Maximum wait for the vLLM health endpoint.\n        evaluation_sample_seed:\
+          \ Seed used when sampling a local JSONL dataset.\n        evaluation_model_mount_path:\
+          \ Mount prefix for a relative verifier path.\n        evaluation_dataset_mount_path:\
+          \ Mount prefix for a relative dataset path.\n    \"\"\"\n    import csv\n\
+          \    import json\n    import math\n    import os\n    import shutil\n  \
+          \  import signal\n    import subprocess\n    import sys\n    import tempfile\n\
+          \    import time\n    from pathlib import Path\n\n    import requests\n\n\
+          \    if shutil.which(\"vllm\") is None:\n        raise RuntimeError(\"vllm\
+          \ binary not found - ensure vLLM is installed in the base image\")\n   \
+          \ if evaluation_max_samples <= 0:\n        raise ValueError(\"evaluation_max_samples\
+          \ must be greater than zero\")\n    if evaluation_max_tokens <= 0:\n   \
+          \     raise ValueError(\"evaluation_max_tokens must be greater than zero\"\
+          )\n\n    verifier_path = verifier_model\n    if verifier_path.startswith(\"\
           pvc://\"):\n        verifier_path = verifier_path.removeprefix(\"pvc://\"\
           ).split(\"/\", 1)[-1]\n    if not os.path.isabs(verifier_path):\n      \
           \  verifier_path = os.path.join(evaluation_model_mount_path, verifier_path)\n\
           \    draft_path = draft_model_path\n    if not os.path.isabs(draft_path):\n\
           \        draft_path = os.path.join(evaluation_model_mount_path, draft_path)\n\
-          \    dataset_path = evaluation_dataset_uri\n    if dataset_path.startswith(\"\
-          pvc://\"):\n        dataset_path = dataset_path.removeprefix(\"pvc://\"\
-          )\n    if not os.path.isabs(dataset_path):\n        dataset_path = os.path.join(evaluation_dataset_mount_path,\
-          \ dataset_path)\n    dataset_path = Path(dataset_path)\n    if dataset_path.is_dir():\n\
-          \        candidates = sorted(dataset_path.glob(\"*.jsonl\"))\n        if\
-          \ not candidates:\n            raise ValueError(f\"No JSONL dataset found\
-          \ in {dataset_path}\")\n        dataset_path = candidates[0]\n\n    prompts\
-          \ = []\n    with dataset_path.open() as dataset_file:\n        for line\
-          \ in dataset_file:\n            if not line.strip():\n                continue\n\
-          \            record = json.loads(line)\n            if isinstance(record,\
-          \ str):\n                prompt = record\n            else:\n          \
-          \      prompt = record.get(\"prompt\")\n                if not prompt:\n\
-          \                    messages = record.get(\"messages\") or record.get(\"\
-          conversations\") or []\n                    user_messages = [\n        \
-          \                message for message in messages if message.get(\"role\"\
-          , message.get(\"from\")) in (\"user\", \"human\")\n                    ]\n\
-          \                    if user_messages:\n                        prompt =\
-          \ user_messages[-1].get(\"content\", user_messages[-1].get(\"value\"))\n\
-          \            if not prompt:\n                raise ValueError(\"Each evaluation\
-          \ record must contain a prompt or user message\")\n            prompts.append(prompt)\n\
-          \    if not prompts:\n        raise ValueError(\"The evaluation dataset\
-          \ contains no prompts\")\n    if evaluation_max_samples <= 0:\n        raise\
-          \ ValueError(\"evaluation_max_samples must be greater than zero\")\n   \
-          \ if len(prompts) > evaluation_max_samples:\n        prompts = random.Random(evaluation_sample_seed).sample(prompts,\
-          \ evaluation_max_samples)\n\n    endpoint = f\"http://127.0.0.1:{evaluation_port}\"\
-          \n    process = None\n\n    def stop_server() -> None:\n        nonlocal\
-          \ process\n        if process is None:\n            return\n        if process.poll()\
-          \ is None:\n            os.killpg(process.pid, signal.SIGTERM)\n       \
-          \     try:\n                process.wait(timeout=30)\n            except\
-          \ subprocess.TimeoutExpired:\n                process.kill()\n         \
-          \       process.wait()\n        process = None\n\n    def start_server(speculative:\
-          \ bool) -> None:\n        nonlocal process\n        command = [\n      \
-          \      \"vllm\",\n            \"serve\",\n            verifier_path,\n \
-          \           \"--host\",\n            \"127.0.0.1\",\n            \"--port\"\
+          \    if not os.path.isdir(verifier_path):\n        raise FileNotFoundError(f\"\
+          Verifier model directory does not exist: {verifier_path}\")\n    if not\
+          \ os.path.isdir(draft_path):\n        raise FileNotFoundError(f\"Draft model\
+          \ directory does not exist: {draft_path}\")\n\n    methods = {\"eagle3\"\
+          : \"eagle3\", \"dflash\": \"dflash\", \"mtp\": \"mtp\", \"peagle\": \"eagle3\"\
+          }\n    method = methods.get(evaluation_speculator_type.lower())\n    if\
+          \ method is None:\n        raise ValueError(f\"Unsupported evaluation_speculator_type:\
+          \ {evaluation_speculator_type}\")\n\n    os.environ[\"VLLM_WORKER_MULTIPROC_METHOD\"\
+          ] = \"spawn\"\n    endpoint = f\"http://127.0.0.1:{evaluation_port}\"\n\
+          \    server_process = None\n\n    def stop_server() -> None:\n        nonlocal\
+          \ server_process\n        if server_process is None:\n            return\n\
+          \        if server_process.poll() is None:\n            try:\n         \
+          \       os.killpg(server_process.pid, signal.SIGTERM)\n            except\
+          \ ProcessLookupError:\n                pass\n            try:\n        \
+          \        server_process.wait(timeout=30)\n            except subprocess.TimeoutExpired:\n\
+          \                server_process.kill()\n                server_process.wait()\n\
+          \        server_process = None\n\n    with tempfile.TemporaryDirectory(prefix=\"\
+          speculator-evaluate-\") as temp_dir:\n        work_dir = Path(temp_dir)\n\
+          \        upstream_dir = work_dir / \"scripts\" / \"evaluate\"\n        upstream_script\
+          \ = _download_upstream_evaluator(str(upstream_dir))\n        local_dataset_path,\
+          \ is_local_dataset, local_request_count = _prepare_local_evaluation_dataset(\n\
+          \            evaluation_dataset_uri,\n            evaluation_dataset_mount_path,\n\
+          \            evaluation_dataset_pvc,\n            evaluation_max_samples,\n\
+          \            evaluation_sample_seed,\n            str(work_dir / \"evaluation_prompts.jsonl\"\
+          ),\n        )\n        subsets = \"local\" if is_local_dataset else \"HumanEval\"\
+          \n        results_dir = work_dir / \"upstream-results\"\n        command\
+          \ = [\n            \"vllm\",\n            \"serve\",\n            verifier_path,\n\
+          \            \"--host\",\n            \"127.0.0.1\",\n            \"--port\"\
           ,\n            str(evaluation_port),\n            \"--gpu-memory-utilization\"\
-          ,\n            str(evaluation_gpu_memory_utilization),\n        ]\n    \
-          \    if speculative:\n            methods = {\"eagle3\": \"eagle3\", \"\
-          dflash\": \"dflash\", \"mtp\": \"mtp\", \"peagle\": \"eagle3\"}\n      \
-          \      method = methods.get(evaluation_speculator_type.lower())\n      \
-          \      if method is None:\n                raise ValueError(f\"Unsupported\
-          \ evaluation_speculator_type: {evaluation_speculator_type}\")\n        \
-          \    command.extend(\n                [\n                    \"--speculative-config\"\
-          ,\n                    json.dumps(\n                        {\n        \
-          \                    \"method\": method,\n                            \"\
-          model\": draft_path,\n                            \"num_speculative_tokens\"\
-          : evaluation_num_speculative_tokens,\n                        }\n      \
-          \              ),\n                ]\n            )\n        process = subprocess.Popen(command,\
-          \ start_new_session=True)\n        deadline = time.monotonic() + evaluation_startup_timeout_seconds\n\
-          \        while time.monotonic() < deadline:\n            if process.poll()\
-          \ is not None:\n                raise RuntimeError(f\"vLLM exited during\
-          \ startup with code {process.returncode}\")\n            try:\n        \
-          \        response = requests.get(f\"{endpoint}/health\", timeout=5)\n  \
-          \              if response.ok:\n                    return\n           \
-          \ except requests.RequestException:\n                pass\n            time.sleep(2)\n\
-          \        raise TimeoutError(f\"vLLM did not become ready within {evaluation_startup_timeout_seconds}\
-          \ seconds\")\n\n    def run_requests() -> tuple[float, int]:\n        started\
-          \ = time.perf_counter()\n        output_tokens = 0\n        for prompt in\
-          \ prompts:\n            response = requests.post(\n                f\"{endpoint}/v1/completions\"\
-          ,\n                json={\n                    \"model\": verifier_path,\n\
-          \                    \"prompt\": prompt,\n                    \"max_tokens\"\
-          : evaluation_max_tokens,\n                    \"temperature\": evaluation_temperature,\n\
-          \                },\n                timeout=evaluation_request_timeout_seconds,\n\
-          \            )\n            response.raise_for_status()\n            usage\
-          \ = response.json().get(\"usage\", {})\n            output_tokens += int(usage.get(\"\
-          completion_tokens\", 0))\n        return time.perf_counter() - started,\
-          \ output_tokens\n\n    def read_speculative_metrics() -> dict[str, float]:\n\
-          \        response = requests.get(f\"{endpoint}/metrics\", timeout=30)\n\
-          \        response.raise_for_status()\n        counters = {}\n        for\
-          \ line in response.text.splitlines():\n            if line.startswith(\"\
-          #\") or \"vllm:spec_decode\" not in line:\n                continue\n  \
-          \          metric, _, value = line.partition(\" \")\n            metric\
-          \ = metric.split(\"{\", 1)[0].removesuffix(\"_total\")\n            try:\n\
-          \                counters[metric] = counters.get(metric, 0.0) + float(value)\n\
-          \            except ValueError:\n                continue\n        draft_tokens\
-          \ = counters.get(\"vllm:spec_decode_num_draft_tokens\", 0.0)\n        accepted_tokens\
-          \ = counters.get(\"vllm:spec_decode_num_accepted_tokens\", 0.0)\n      \
-          \  drafts = counters.get(\"vllm:spec_decode_num_drafts\", 0.0)\n       \
-          \ return {\n            \"num_drafts\": drafts,\n            \"num_draft_tokens\"\
-          : draft_tokens,\n            \"num_accepted_tokens\": accepted_tokens,\n\
-          \            \"acceptance_rate\": accepted_tokens / draft_tokens if draft_tokens\
-          \ else 0.0,\n            \"acceptance_length\": 1.0 + accepted_tokens /\
-          \ drafts if drafts else 0.0,\n        }\n\n    try:\n        start_server(speculative=False)\n\
-          \        baseline_seconds, baseline_tokens = run_requests()\n        stop_server()\n\
-          \n        start_server(speculative=True)\n        speculative_seconds, speculative_tokens\
-          \ = run_requests()\n        spec_metrics = read_speculative_metrics()\n\
-          \    finally:\n        stop_server()\n\n    results = {\n        **spec_metrics,\n\
-          \        \"baseline_seconds\": baseline_seconds,\n        \"speculative_seconds\"\
-          : speculative_seconds,\n        \"baseline_output_tokens\": baseline_tokens,\n\
-          \        \"speculative_output_tokens\": speculative_tokens,\n        \"\
-          speedup\": baseline_seconds / speculative_seconds if speculative_seconds\
-          \ else 0.0,\n        \"requests\": len(prompts),\n    }\n    with Path(output_results.path).open(\"\
-          w\") as results_file:\n        json.dump(results, results_file, indent=2)\n\
-          \    for name in (\"acceptance_rate\", \"acceptance_length\", \"speedup\"\
-          ):\n        output_metrics.log_metric(name, results[name])\n\n"
+          ,\n            str(evaluation_gpu_memory_utilization),\n            \"--speculative-config\"\
+          ,\n            json.dumps(\n                {\n                    \"method\"\
+          : method,\n                    \"model\": draft_path,\n                \
+          \    \"draft_tensor_parallel_size\": 1,\n                    \"num_speculative_tokens\"\
+          : evaluation_num_speculative_tokens,\n                }\n            ),\n\
+          \        ]\n        evaluate_command = _build_upstream_evaluate_command(\n\
+          \            sys.executable,\n            upstream_script,\n           \
+          \ f\"{endpoint}/v1\",\n            local_dataset_path,\n            subsets,\n\
+          \            str(results_dir),\n            evaluation_max_samples,\n  \
+          \          evaluation_max_tokens,\n            evaluation_temperature,\n\
+          \        )\n\n        try:\n            server_process = subprocess.Popen(command,\
+          \ start_new_session=True)\n            deadline = time.monotonic() + evaluation_startup_timeout_seconds\n\
+          \            while time.monotonic() < deadline:\n                if server_process.poll()\
+          \ is not None:\n                    raise RuntimeError(f\"Speculative vLLM\
+          \ exited during startup with code {server_process.returncode}\")\n     \
+          \           try:\n                    response = requests.get(f\"{endpoint}/health\"\
+          , timeout=5)\n                    if response.ok:\n                    \
+          \    break\n                except requests.RequestException:\n        \
+          \            pass\n                time.sleep(2)\n            else:\n  \
+          \              raise TimeoutError(\n                    f\"Speculative vLLM\
+          \ did not become ready within {evaluation_startup_timeout_seconds} seconds\"\
+          \n                )\n\n            dataset_description = (\n           \
+          \     f\"local dataset ({local_request_count} prompts)\" if is_local_dataset\
+          \ else evaluation_dataset_uri\n            )\n            print(\n     \
+          \           f\"Running upstream Speculators evaluation at commit 7883cd44264e6958cfc003963e5cdb895eb53bf1:\
+          \ \"\n                f\"{dataset_description}\",\n                flush=True,\n\
+          \            )\n            evaluator_environment = os.environ.copy()\n\
+          \            compat_path = str(upstream_dir / \"compat\")\n            existing_pythonpath\
+          \ = evaluator_environment.get(\"PYTHONPATH\")\n            evaluator_environment[\"\
+          PYTHONPATH\"] = (\n                compat_path if not existing_pythonpath\
+          \ else f\"{compat_path}{os.pathsep}{existing_pythonpath}\"\n           \
+          \ )\n            subprocess.run(evaluate_command, check=True, env=evaluator_environment)\n\
+          \        finally:\n            stop_server()\n\n        acceptance_path\
+          \ = results_dir / \"acceptance.csv\"\n        if not acceptance_path.is_file():\n\
+          \            raise RuntimeError(f\"Upstream evaluator did not produce {acceptance_path}\"\
+          )\n        with acceptance_path.open(newline=\"\") as acceptance_file:\n\
+          \            acceptance_rows = list(csv.DictReader(acceptance_file))\n \
+          \       if not acceptance_rows:\n            raise RuntimeError(\"Upstream\
+          \ evaluator produced an empty acceptance.csv\")\n\n        total_drafts\
+          \ = sum(float(row.get(\"num_drafts\") or 0) for row in acceptance_rows)\n\
+          \        total_draft_tokens = sum(float(row.get(\"num_draft_tokens\") or\
+          \ 0) for row in acceptance_rows)\n        total_accepted_tokens = sum(float(row.get(\"\
+          num_accepted_tokens\") or 0) for row in acceptance_rows)\n        if total_drafts\
+          \ > 0:\n            output_metrics.log_metric(\"acceptance_length\", 1.0\
+          \ + total_accepted_tokens / total_drafts)\n            output_metrics.log_metric(\"\
+          num_drafts\", total_drafts)\n        if total_draft_tokens > 0:\n      \
+          \      output_metrics.log_metric(\"acceptance_rate\", total_accepted_tokens\
+          \ / total_draft_tokens)\n            output_metrics.log_metric(\"num_draft_tokens\"\
+          , total_draft_tokens)\n            output_metrics.log_metric(\"num_accepted_tokens\"\
+          , total_accepted_tokens)\n        for position in range(100):\n        \
+          \    column = f\"acceptance_at_pos_{position}\"\n            if not any(column\
+          \ in row for row in acceptance_rows):\n                break\n         \
+          \   weighted = sum(float(row.get(column) or 0) * float(row.get(\"num_drafts\"\
+          ) or 0) for row in acceptance_rows)\n            if total_drafts > 0:\n\
+          \                output_metrics.log_metric(column, weighted / total_drafts)\n\
+          \n        performance_path = results_dir / \"perf_results.csv\"\n      \
+          \  if performance_path.is_file():\n            with performance_path.open(newline=\"\
+          \") as performance_file:\n                performance_rows = list(csv.DictReader(performance_file))\n\
+          \            metric_columns = {\n                \"rps_median\": (\"max_requests_per_second\"\
+          , max),\n                \"output_tps_median\": (\"max_output_tokens_per_second\"\
+          , max),\n                \"latency_median_s\": (\"min_latency_median_seconds\"\
+          , min),\n                \"itl_median_ms\": (\"min_inter_token_latency_milliseconds\"\
+          , min),\n                \"ttft_median_ms\": (\"min_time_to_first_token_milliseconds\"\
+          , min),\n            }\n            for column, (metric_name, selector)\
+          \ in metric_columns.items():\n                values = []\n            \
+          \    for row in performance_rows:\n                    try:\n          \
+          \              value = float(row.get(column, \"\"))\n                  \
+          \  except (TypeError, ValueError):\n                        continue\n \
+          \                   if math.isfinite(value):\n                        values.append(value)\n\
+          \                if values:\n                    output_metrics.log_metric(metric_name,\
+          \ selector(values))\n\n        artifact_path = Path(output_results.path)\n\
+          \        if artifact_path.exists() and artifact_path.is_file():\n      \
+          \      artifact_path.unlink()\n        shutil.copytree(results_dir, artifact_path,\
+          \ dirs_exist_ok=True)\n        output_results.name = \"speculator-performance-evaluation\"\
+          \n        output_results.metadata[\"evaluation_tool\"] = \"vllm-project/speculators/scripts/evaluate/evaluate.py\"\
+          \n        output_results.metadata[\"evaluation_tool_revision\"] = \"7883cd44264e6958cfc003963e5cdb895eb53bf1\"\
+          \n        output_results.metadata[\"evaluation_mode\"] = \"sweep\"\n   \
+          \     output_results.metadata[\"evaluation_dataset\"] = evaluation_dataset_uri\n\
+          \        output_results.metadata[\"evaluation_subsets\"] = subsets\n   \
+          \     output_results.metadata[\"evaluation_max_samples\"] = evaluation_max_samples\n\
+          \n"
         image: quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b
         resources:
           accelerator:
@@ -591,8 +818,7 @@ deploymentSpec:
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
-          \ 'kubernetes' 'olot' 'git+https://github.com/opendatahub-io/kubeflow-sdk.git@main'\
-          \ && \"$0\" \"$@\"\n"
+          \ 'kubernetes' 'olot' && \"$0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -604,7 +830,7 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\n__KFP_EMBEDDED_ARCHIVE_B64 = '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'\n\
+          \ *\n\n__KFP_EMBEDDED_ARCHIVE_B64 = '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'\n\
           \nimport base64 as __kfp_b64\nimport io as __kfp_io\nimport os as __kfp_os\n\
           import sys as __kfp_sys\nimport tarfile as __kfp_tarfile\nimport tempfile\
           \ as __kfp_tempfile\n\n# Extract embedded archive at import time to ensure\
@@ -646,8 +872,276 @@ deploymentSpec:
           \ model with a managed vLLM sidecar.\"\"\"\n    from speculator import run_speculator\n\
           \n    return run_speculator(\"online\", locals())\n\n"
         image: quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b
+    exec-speculative-decoding-serving:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - speculative_decoding_serving
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kubernetes>=28.1.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef speculative_decoding_serving(\n    namespace: str,\n    endpoint_name:\
+          \ str,\n    model_cache_pvc: str,\n    verifier_model_dir: str,\n    draft_model_dir:\
+          \ str,\n    runtime_image: str,\n    hardware_profile_name: str = \"gpu-profile\"\
+          ,\n    min_replicas: int = 1,\n    max_replicas: int = 1,\n    gpu_count:\
+          \ int = 1,\n    draft_tensor_parallel_size: int = 1,\n    max_model_len:\
+          \ int = 4096,\n    num_speculative_tokens: int = 3,\n    cpu_requests: str\
+          \ = \"2\",\n    memory_requests: str = \"8Gi\",\n    cpu_limits: str = \"\
+          2\",\n    memory_limits: str = \"8Gi\",\n    gpu_memory_utilization: float\
+          \ = 0.9,\n    max_num_seqs: int = 16,\n    trust_remote_code: bool = False,\n\
+          \    enable_auth: bool = False,\n    enable_external_route: bool = False,\n\
+          ) -> str:\n    \"\"\"Serve a verifier and Eagle3 draft model through one\
+          \ vLLM endpoint.\n\n    The verifier and draft directories must already\
+          \ exist on ``model_cache_pvc``.\n    KServe mounts the PVC root at ``/mnt/models``.\
+          \ The draft directory should\n    contain the speculator checkpoint's ``config.json``\
+          \ and weights. vLLM receives\n    an Eagle3 ``--speculative-config`` that\
+          \ points to the draft path under that\n    root; the verifier is the primary\
+          \ ``--model``.\n\n    Args:\n        namespace: Namespace in which to create\
+          \ the KServe resources.\n        endpoint_name: DNS-compatible InferenceService\
+          \ name.\n        model_cache_pvc: PVC containing both model directories.\n\
+          \        verifier_model_dir: Relative PVC directory containing the verifier\
+          \ model.\n        draft_model_dir: Relative PVC directory containing the\
+          \ draft checkpoint.\n        runtime_image: vLLM CUDA image supporting Eagle3\
+          \ speculative decoding.\n        hardware_profile_name: RHOAI HardwareProfile\
+          \ name, or empty to skip lookup.\n        min_replicas: Minimum number of\
+          \ predictor replicas.\n        max_replicas: Maximum number of predictor\
+          \ replicas.\n        gpu_count: GPUs per predictor; also used as verifier\
+          \ vLLM tensor parallel size.\n        draft_tensor_parallel_size: vLLM tensor\
+          \ parallel size for the draft model.\n        max_model_len: Maximum verifier\
+          \ context length.\n        num_speculative_tokens: Number of draft tokens\
+          \ proposed per step.\n        cpu_requests: Predictor CPU request.\n   \
+          \     memory_requests: Predictor memory request.\n        cpu_limits: Predictor\
+          \ CPU limit.\n        memory_limits: Predictor memory limit.\n        gpu_memory_utilization:\
+          \ Fraction of GPU memory available to vLLM.\n        max_num_seqs: Maximum\
+          \ concurrent sequences in the vLLM scheduler.\n        trust_remote_code:\
+          \ Pass ``--trust-remote-code`` for the draft checkpoint.\n        enable_auth:\
+          \ Enable RHOAI authentication for the exposed endpoint.\n        enable_external_route:\
+          \ Create an OpenShift Route so the endpoint is reachable\n            outside\
+          \ the cluster. Requires a one-time RBAC setup \u2014 see ``rbac.yaml`` in\n\
+          \            this component's directory. When ``False`` (the default) the\
+          \ internal\n            cluster-local URL is returned, which is usable from\
+          \ any pod in the cluster\n            or via ``oc port-forward``.\n\n  \
+          \  Returns:\n        The OpenAI-compatible ``/v1`` endpoint URL (external\
+          \ HTTPS Route URL when\n        ``enable_external_route=True``, internal\
+          \ cluster URL otherwise).\n    \"\"\"\n    import json\n    import re\n\
+          \    import time\n    from urllib.parse import urlparse\n\n    from kubernetes\
+          \ import client as kclient\n    from kubernetes import config\n\n    dns_label\
+          \ = re.compile(r\"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$\")\n\n    def validate_dns_label(value:\
+          \ str, field_name: str) -> str:\n        value = value.strip()\n       \
+          \ if not value or len(value) > 63 or not dns_label.fullmatch(value):\n \
+          \           raise ValueError(f\"{field_name} must be a DNS-compatible name\
+          \ of at most 63 characters: {value!r}\")\n        return value\n\n    def\
+          \ normalize_model_dir(value: str, field_name: str) -> str:\n        value\
+          \ = value.strip()\n        if value.startswith(\"/\"):\n            raise\
+          \ ValueError(f\"{field_name} must be a non-empty relative PVC directory:\
+          \ {value!r}\")\n        value = value.strip(\"/\")\n        parts = value.split(\"\
+          /\") if value else []\n        if not value or any(part in {\"\", \".\"\
+          , \"..\"} for part in parts):\n            raise ValueError(f\"{field_name}\
+          \ must be a non-empty relative PVC directory: {value!r}\")\n        return\
+          \ value\n\n    namespace = validate_dns_label(namespace, \"namespace\")\n\
+          \    endpoint_name = validate_dns_label(endpoint_name, \"endpoint_name\"\
+          )\n    model_cache_pvc = validate_dns_label(model_cache_pvc, \"model_cache_pvc\"\
+          )\n    verifier_model_dir = normalize_model_dir(verifier_model_dir, \"verifier_model_dir\"\
+          )\n    draft_model_dir = normalize_model_dir(draft_model_dir, \"draft_model_dir\"\
+          )\n    runtime_image = runtime_image.strip()\n    if not runtime_image:\n\
+          \        raise ValueError(\"runtime_image must not be empty\")\n    if min_replicas\
+          \ < 1 or max_replicas < min_replicas:\n        raise ValueError(\"replica\
+          \ settings must satisfy 1 <= min_replicas <= max_replicas\")\n    if gpu_count\
+          \ < 1:\n        raise ValueError(\"gpu_count must be at least 1 for the\
+          \ CUDA serving runtime\")\n    if draft_tensor_parallel_size < 1 or draft_tensor_parallel_size\
+          \ not in (1, gpu_count):\n        raise ValueError(\"draft_tensor_parallel_size\
+          \ must be 1 or equal to gpu_count\")\n    if max_model_len < 1 or num_speculative_tokens\
+          \ < 1 or max_num_seqs < 1:\n        raise ValueError(\"max_model_len, num_speculative_tokens,\
+          \ and max_num_seqs must be positive\")\n    if (\n        isinstance(gpu_memory_utilization,\
+          \ bool)\n        or not isinstance(gpu_memory_utilization, (int, float))\n\
+          \        or not 0 < gpu_memory_utilization <= 1\n    ):\n        raise ValueError(\"\
+          gpu_memory_utilization must be greater than 0 and at most 1\")\n\n    serving_runtime_name\
+          \ = f\"{endpoint_name}-runtime\"\n\n    config.load_incluster_config()\n\
+          \    custom_api = kclient.CustomObjectsApi()\n\n    _hp_namespace = \"redhat-ods-applications\"\
+          \n    hp_resource_version = \"\"\n    if hardware_profile_name:\n      \
+          \  try:\n            hp = custom_api.get_namespaced_custom_object(\n   \
+          \             group=\"infrastructure.opendatahub.io\",\n               \
+          \ version=\"v1\",\n                namespace=_hp_namespace,\n          \
+          \      plural=\"hardwareprofiles\",\n                name=hardware_profile_name,\n\
+          \            )\n            hp_resource_version = hp.get(\"metadata\", {}).get(\"\
+          resourceVersion\", \"\")\n            print(f\"Found HardwareProfile '{hardware_profile_name}'\
+          \ (rv={hp_resource_version}).\")\n        except kclient.rest.ApiException\
+          \ as error:\n            if error.status != 404:\n                raise\n\
+          \            print(f\"HardwareProfile '{hardware_profile_name}' not found,\
+          \ proceeding without it.\")\n\n    model_root = \"/mnt/models\"\n    verifier_model_path\
+          \ = f\"{model_root}/{verifier_model_dir}\"\n    draft_model_path = f\"{model_root}/{draft_model_dir}\"\
+          \n    speculative_config = {\n        \"method\": \"eagle3\",\n        \"\
+          model\": draft_model_path,\n        \"draft_tensor_parallel_size\": draft_tensor_parallel_size,\n\
+          \        \"num_speculative_tokens\": num_speculative_tokens,\n    }\n  \
+          \  runtime_args = [\n        \"--port=8080\",\n        f\"--model={verifier_model_path}\"\
+          ,\n        \"--speculative-config\",\n        json.dumps(speculative_config,\
+          \ separators=(\",\", \":\")),\n        \"--served-model-name={{.Name}}\"\
+          ,\n        f\"--max-model-len={max_model_len}\",\n        f\"--gpu-memory-utilization={gpu_memory_utilization}\"\
+          ,\n        f\"--max-num-seqs={max_num_seqs}\",\n        f\"--tensor-parallel-size={gpu_count}\"\
+          ,\n    ]\n    if trust_remote_code:\n        runtime_args.append(\"--trust-remote-code\"\
+          )\n\n    serving_runtime = {\n        \"apiVersion\": \"serving.kserve.io/v1alpha1\"\
+          ,\n        \"kind\": \"ServingRuntime\",\n        \"metadata\": {\n    \
+          \        \"name\": serving_runtime_name,\n            \"namespace\": namespace,\n\
+          \            \"annotations\": {\n                \"opendatahub.io/apiProtocol\"\
+          : \"REST\",\n                \"opendatahub.io/recommended-accelerators\"\
+          : '[\"nvidia.com/gpu\"]',\n                \"opendatahub.io/runtime-version\"\
+          : \"v0.24.0\",\n                \"opendatahub.io/serving-runtime-scope\"\
+          : \"global\",\n                \"opendatahub.io/template-display-name\"\
+          : \"vLLM NVIDIA GPU ServingRuntime for KServe\",\n                \"opendatahub.io/template-name\"\
+          : \"vllm-cuda-runtime-template\",\n                \"openshift.io/display-name\"\
+          : \"vLLM NVIDIA GPU ServingRuntime for KServe\",\n            },\n     \
+          \       \"labels\": {\"opendatahub.io/dashboard\": \"true\"},\n        },\n\
+          \        \"spec\": {\n            \"annotations\": {\n                \"\
+          opendatahub.io/kserve-runtime\": \"vllm\",\n                \"prometheus.io/path\"\
+          : \"/metrics\",\n                \"prometheus.io/port\": \"8080\",\n   \
+          \         },\n            \"multiModel\": False,\n            \"supportedModelFormats\"\
+          : [{\"name\": \"vLLM\", \"autoSelect\": True}],\n            \"containers\"\
+          : [\n                {\n                    \"name\": \"kserve-container\"\
+          ,\n                    \"image\": runtime_image,\n                    \"\
+          command\": [\"python3\", \"-m\", \"vllm.entrypoints.openai.api_server\"\
+          ],\n                    \"args\": runtime_args,\n                    \"\
+          env\": [\n                        {\"name\": \"HOME\", \"value\": \"/tmp\"\
+          },\n                        {\"name\": \"USER\", \"value\": \"default\"\
+          },\n                        {\"name\": \"LOGNAME\", \"value\": \"default\"\
+          },\n                        {\"name\": \"USERNAME\", \"value\": \"default\"\
+          },\n                        {\"name\": \"HF_HOME\", \"value\": \"/tmp/hf_home\"\
+          },\n                        {\"name\": \"HUGGINGFACE_HUB_CACHE\", \"value\"\
+          : \"/tmp/hf_home\"},\n                        {\"name\": \"XDG_CACHE_HOME\"\
+          , \"value\": \"/tmp/.cache\"},\n                        {\"name\": \"TORCHINDUCTOR_CACHE_DIR\"\
+          , \"value\": \"/tmp/torchinductor\"},\n                        {\"name\"\
+          : \"HF_HUB_OFFLINE\", \"value\": \"1\"},\n                        {\"name\"\
+          : \"TRANSFORMERS_OFFLINE\", \"value\": \"1\"},\n                       \
+          \ {\"name\": \"VLLM_ATTENTION_BACKEND\", \"value\": \"TRITON_ATTN\"},\n\
+          \                        {\"name\": \"PYTORCH_CUDA_ALLOC_CONF\", \"value\"\
+          : \"expandable_segments:True\"},\n                    ],\n             \
+          \       \"ports\": [{\"containerPort\": 8080, \"protocol\": \"TCP\"}],\n\
+          \                }\n            ],\n        },\n    }\n\n    def upsert_custom_object(group:\
+          \ str, version: str, plural: str, name: str, body: dict) -> None:\n    \
+          \    try:\n            custom_api.get_namespaced_custom_object(\n      \
+          \          group=group,\n                version=version,\n            \
+          \    namespace=namespace,\n                plural=plural,\n            \
+          \    name=name,\n            )\n        except kclient.rest.ApiException\
+          \ as error:\n            if error.status != 404:\n                raise\n\
+          \            custom_api.create_namespaced_custom_object(\n             \
+          \   group=group,\n                version=version,\n                namespace=namespace,\n\
+          \                plural=plural,\n                body=body,\n          \
+          \  )\n            print(f\"Created {plural} '{name}'.\")\n        else:\n\
+          \            custom_api.patch_namespaced_custom_object(\n              \
+          \  group=group,\n                version=version,\n                namespace=namespace,\n\
+          \                plural=plural,\n                name=name,\n          \
+          \      body=body,\n            )\n            print(f\"Updated {plural}\
+          \ '{name}'.\")\n\n    upsert_custom_object(\n        group=\"serving.kserve.io\"\
+          ,\n        version=\"v1alpha1\",\n        plural=\"servingruntimes\",\n\
+          \        name=serving_runtime_name,\n        body=serving_runtime,\n   \
+          \ )\n\n    gpu_resources = {\"nvidia.com/gpu\": str(gpu_count)}\n    resources\
+          \ = {\n        \"requests\": {\"cpu\": cpu_requests, \"memory\": memory_requests,\
+          \ **gpu_resources},\n        \"limits\": {\"cpu\": cpu_limits, \"memory\"\
+          : memory_limits, **gpu_resources},\n    }\n    isvc_annotations = {\n  \
+          \      \"serving.kserve.io/deploymentMode\": \"RawDeployment\",\n      \
+          \  \"security.opendatahub.io/enable-auth\": str(enable_auth).lower(),\n\
+          \        \"opendatahub.io/model-type\": \"generative\",\n        \"opendatahub.io/genai-use-case\"\
+          : \"speculative-decoding\",\n        \"openshift.io/display-name\": endpoint_name,\n\
+          \    }\n    if hardware_profile_name:\n        isvc_annotations.update(\n\
+          \            {\n                \"opendatahub.io/hardware-profile-name\"\
+          : hardware_profile_name,\n                \"opendatahub.io/hardware-profile-namespace\"\
+          : _hp_namespace,\n            }\n        )\n        if hp_resource_version:\n\
+          \            isvc_annotations[\"opendatahub.io/hardware-profile-resource-version\"\
+          ] = hp_resource_version\n\n    isvc = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\"\
+          ,\n        \"kind\": \"InferenceService\",\n        \"metadata\": {\n  \
+          \          \"name\": endpoint_name,\n            \"namespace\": namespace,\n\
+          \            \"annotations\": isvc_annotations,\n            \"labels\"\
+          : {\n                \"opendatahub.io/dashboard\": \"true\",\n         \
+          \       \"opendatahub.io/genai-asset\": \"true\",\n            },\n    \
+          \    },\n        \"spec\": {\n            \"predictor\": {\n           \
+          \     \"minReplicas\": min_replicas,\n                \"maxReplicas\": max_replicas,\n\
+          \                \"automountServiceAccountToken\": False,\n            \
+          \    \"deploymentStrategy\": {\"type\": \"RollingUpdate\"},\n          \
+          \      \"model\": {\n                    \"modelFormat\": {\"name\": \"\
+          vLLM\"},\n                    \"name\": \"\",\n                    \"runtime\"\
+          : serving_runtime_name,\n                    \"storageUri\": f\"pvc://{model_cache_pvc}\"\
+          ,\n                    \"resources\": resources,\n                },\n \
+          \           }\n        },\n    }\n\n    upsert_custom_object(\n        group=\"\
+          serving.kserve.io\",\n        version=\"v1beta1\",\n        plural=\"inferenceservices\"\
+          ,\n        name=endpoint_name,\n        body=isvc,\n    )\n\n    print(\"\
+          Waiting for InferenceService to become ready...\")\n    for _ in range(60):\n\
+          \        obj = custom_api.get_namespaced_custom_object(\n            group=\"\
+          serving.kserve.io\",\n            version=\"v1beta1\",\n            namespace=namespace,\n\
+          \            plural=\"inferenceservices\",\n            name=endpoint_name,\n\
+          \        )\n        conditions = obj.get(\"status\", {}).get(\"conditions\"\
+          , [])\n        if any(condition.get(\"type\") == \"Ready\" and condition.get(\"\
+          status\") == \"True\" for condition in conditions):\n            if enable_external_route:\n\
+          \                predictor_svc = f\"{endpoint_name}-predictor\"\n      \
+          \          route_body = {\n                    \"apiVersion\": \"route.openshift.io/v1\"\
+          ,\n                    \"kind\": \"Route\",\n                    \"metadata\"\
+          : {\n                        \"name\": endpoint_name,\n                \
+          \        \"namespace\": namespace,\n                        \"labels\":\
+          \ {\n                            \"opendatahub.io/dashboard\": \"true\"\
+          ,\n                            \"serving.kserve.io/inferenceservice\": endpoint_name,\n\
+          \                        },\n                    },\n                  \
+          \  \"spec\": {\n                        \"to\": {\"kind\": \"Service\",\
+          \ \"name\": predictor_svc, \"weight\": 100},\n                        \"\
+          port\": {\"targetPort\": \"http\"},\n                        \"tls\": {\n\
+          \                            \"termination\": \"edge\",\n              \
+          \              \"insecureEdgeTerminationPolicy\": \"Redirect\",\n      \
+          \                  },\n                        \"wildcardPolicy\": \"None\"\
+          ,\n                    },\n                }\n                try:\n   \
+          \                 upsert_custom_object(\n                        group=\"\
+          route.openshift.io\",\n                        version=\"v1\",\n       \
+          \                 plural=\"routes\",\n                        name=endpoint_name,\n\
+          \                        body=route_body,\n                    )\n     \
+          \               route = custom_api.get_namespaced_custom_object(\n     \
+          \                   group=\"route.openshift.io\",\n                    \
+          \    version=\"v1\",\n                        namespace=namespace,\n   \
+          \                     plural=\"routes\",\n                        name=endpoint_name,\n\
+          \                    )\n                except kclient.rest.ApiException\
+          \ as exc:\n                    if exc.status == 403:\n                 \
+          \       raise RuntimeError(\n                            f\"Permission denied\
+          \ creating Route '{endpoint_name}' in \"\n                            f\"\
+          namespace '{namespace}'. The pipeline-runner-dspa service \"\n         \
+          \                   \"account lacks permission to manage routes.route.openshift.io\
+          \ \"\n                            \"by default. Apply the one-time RBAC\
+          \ setup before retrying:\\n\\n\"\n                            f\"  NAMESPACE={namespace}\\\
+          n\"\n                            '  sed \"s/<NAMESPACE>/$NAMESPACE/g\" \\\
+          \\\\n'\n                            \"    components/deployment/speculative_decoding_serving/\"\
+          \n                            \"rbac.yaml | oc apply -f -\\n\\n\"\n    \
+          \                        \"See the Prerequisites section of the component\
+          \ README for details.\"\n                        ) from exc\n          \
+          \          raise\n                host = route.get(\"spec\", {}).get(\"\
+          host\", \"\")\n                if not host:\n                    raise RuntimeError(f\"\
+          Route '{endpoint_name}' was created but has no host assigned\")\n      \
+          \          endpoint = f\"https://{host}/v1\"\n                print(f\"\
+          InferenceService ready (external route): {endpoint}\")\n               \
+          \ return endpoint\n\n            status = obj.get(\"status\", {})\n    \
+          \        url = status.get(\"url\") or status.get(\"address\", {}).get(\"\
+          url\", \"\")\n            if not url:\n                raise RuntimeError(f\"\
+          InferenceService '{endpoint_name}' is Ready but did not publish a URL\"\
+          )\n            parsed = urlparse(url.strip())\n            endpoint = f\"\
+          {parsed.scheme}://{parsed.netloc}/v1\"\n            print(f\"InferenceService\
+          \ ready: {endpoint}\")\n            return endpoint\n\n        time.sleep(30)\n\
+          \n    raise TimeoutError(f\"InferenceService '{endpoint_name}' did not become\
+          \ ready within 30 minutes.\")\n\n"
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:f9844dc150592a9f196283b3645dda92bd80dfdb3d467fa8725b10267ea5bdbc
 pipelineInfo:
-  description: Train a Speculator model with managed vLLM in online mode.
+  description: Train and evaluate a Speculator model, then serve it with vLLM.
   name: speculator-online-pipeline
 root:
   dag:
@@ -678,6 +1172,8 @@ root:
             draft_model_path:
               runtimeValue:
                 constant: /mnt/persistent/final_model
+            evaluation_dataset_pvc:
+              componentInputParameter: persistent_pvc
             evaluation_dataset_uri:
               componentInputParameter: evaluation_dataset_uri
             evaluation_gpu_memory_utilization:
@@ -688,8 +1184,6 @@ root:
               componentInputParameter: evaluation_max_tokens
             evaluation_num_speculative_tokens:
               componentInputParameter: evaluation_num_speculative_tokens
-            evaluation_request_timeout_seconds:
-              componentInputParameter: evaluation_request_timeout_seconds
             evaluation_sample_seed:
               componentInputParameter: evaluation_sample_seed
             evaluation_speculator_type:
@@ -804,6 +1298,37 @@ root:
               componentInputParameter: vllm_resource_memory
         taskInfo:
           name: online-speculator
+      speculative-decoding-serving:
+        cachingOptions: {}
+        componentRef:
+          name: comp-speculative-decoding-serving
+        dependentTasks:
+        - evaluate-speculator
+        inputs:
+          parameters:
+            draft_model_dir:
+              runtimeValue:
+                constant: final_model
+            endpoint_name:
+              componentInputParameter: serving_endpoint_name
+            gpu_count:
+              componentInputParameter: vllm_resource_gpu
+            gpu_memory_utilization:
+              componentInputParameter: evaluation_gpu_memory_utilization
+            max_model_len:
+              componentInputParameter: total_seq_len
+            model_cache_pvc:
+              componentInputParameter: persistent_pvc
+            namespace:
+              componentInputParameter: serving_namespace
+            num_speculative_tokens:
+              componentInputParameter: evaluation_num_speculative_tokens
+            runtime_image:
+              componentInputParameter: serving_runtime_image
+            verifier_model_dir:
+              componentInputParameter: verifier_model_pvc
+        taskInfo:
+          name: speculative-decoding-serving
   inputDefinitions:
     parameters:
       data_extraction_concurrency:
@@ -827,13 +1352,15 @@ root:
         isOptional: true
         parameterType: BOOLEAN
       evaluation_dataset_uri:
+        defaultValue: RedHatAI/speculator_benchmarks
+        isOptional: true
         parameterType: STRING
       evaluation_gpu_memory_utilization:
         defaultValue: 0.9
         isOptional: true
         parameterType: NUMBER_DOUBLE
       evaluation_max_samples:
-        defaultValue: 20.0
+        defaultValue: 80.0
         isOptional: true
         parameterType: NUMBER_INTEGER
       evaluation_max_tokens:
@@ -842,10 +1369,6 @@ root:
         parameterType: NUMBER_INTEGER
       evaluation_num_speculative_tokens:
         defaultValue: 5.0
-        isOptional: true
-        parameterType: NUMBER_INTEGER
-      evaluation_request_timeout_seconds:
-        defaultValue: 600.0
         isOptional: true
         parameterType: NUMBER_INTEGER
       evaluation_sample_seed:
@@ -881,6 +1404,14 @@ root:
       pip_index_urls:
         defaultValue: ''
         isOptional: true
+        parameterType: STRING
+      serving_endpoint_name:
+        defaultValue: speculator-online
+        isOptional: true
+        parameterType: STRING
+      serving_namespace:
+        parameterType: STRING
+      serving_runtime_image:
         parameterType: STRING
       speculator_type:
         defaultValue: eagle3
@@ -1084,6 +1615,8 @@ platforms:
             secretNameParameter:
               runtimeValue:
                 constant: hf-token
+        exec-speculative-decoding-serving:
+          imagePullPolicy: IfNotPresent
     pipelineConfig:
       workspace:
         kubernetes:

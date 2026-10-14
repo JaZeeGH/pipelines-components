@@ -63,13 +63,16 @@ def extract_speculator(
 
     ``dataset_name`` selects the source dataset. When regeneration is enabled,
     responses are regenerated through the verifier before hidden-state extraction.
-    Managed mode uses the in-job vLLM sidecar; providing ``vllm_endpoint`` uses an
-    external vLLM service and requires matching shared model and hidden-state paths.
+    Managed mode uses the in-job vLLM sidecar. When model downloading is disabled,
+    the managed sidecar uses ``verifier_model_pvc`` if provided. Remote mode uses
+    an external vLLM service and requires matching shared model and hidden-state paths.
     """
     from speculator import run_speculator
 
     if vllm_source == "remote":
         verifier_model = verifier_model_pvc or verifier_model
+    elif verifier_model_pvc and not download_model:
+        verifier_model = verifier_model_pvc
     if not vllm_endpoint:
         vllm_endpoint = None
     if dataset_download_enabled:

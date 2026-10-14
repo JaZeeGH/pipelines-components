@@ -4,13 +4,19 @@
 
 ## Overview 🧾
 
-Extract hidden states, then train from them in a separate task.
+Extract hidden states, train and evaluate the draft, then serve it.
+
+Serving requires the namespace and a verified vLLM runtime image pull spec.
 
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
 | `persistent_pvc` | `str` | `None` |  |
+| `serving_namespace` | `str` | `None` |  |
+| `serving_runtime_image` | `str` | `None` |  |
+| `evaluation_dataset_uri` | `str` | `RedHatAI/speculator_benchmarks` |  |
+| `serving_endpoint_name` | `str` | `speculator-offline` |  |
 | `verifier_model` | `str` | `models/Qwen--Qwen2.5-1.5B-Instruct` |  |
 | `output_dir` | `str` | `speculator-output` |  |
 | `dataset_name` | `str` | `ultrachat` |  |
@@ -50,6 +56,13 @@ Extract hidden states, then train from them in a separate task.
 | `pip_index_urls` | `str` | `""` |  |
 | `training_envs` | `str` | `NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1` |  |
 | `training_runtime` | `str` | `speculator-model-opt-cuda` |  |
+| `evaluation_max_samples` | `int` | `80` |  |
+| `evaluation_max_tokens` | `int` | `256` |  |
+| `evaluation_temperature` | `float` | `0.0` |  |
+| `evaluation_num_speculative_tokens` | `int` | `5` |  |
+| `evaluation_gpu_memory_utilization` | `float` | `0.9` |  |
+| `evaluation_startup_timeout_seconds` | `int` | `900` |  |
+| `evaluation_sample_seed` | `int` | `42` |  |
 
 ## Metadata 🗂️
 

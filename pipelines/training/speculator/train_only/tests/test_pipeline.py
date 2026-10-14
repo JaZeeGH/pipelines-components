@@ -20,6 +20,9 @@ class TestSpeculatorTrainOnlyPipeline:
             "evaluation_max_samples",
             "evaluation_num_speculative_tokens",
             "evaluation_sample_seed",
+            "serving_namespace",
+            "serving_runtime_image",
+            "serving_endpoint_name",
         ):
             assert name in inputs
 
@@ -31,3 +34,17 @@ class TestSpeculatorTrainOnlyPipeline:
             package_path=str(output_path),
         )
         assert output_path.exists()
+
+    def test_serving_runs_after_evaluation(self, tmp_path):
+        """Serving is scheduled only after the evaluation task completes."""
+        import yaml
+
+        output_path = tmp_path / "pipeline.yaml"
+        compiler.Compiler().compile(
+            pipeline_func=speculator_train_only_pipeline,
+            package_path=str(output_path),
+        )
+        pipeline_spec = next(yaml.safe_load_all(output_path.read_text()))
+        tasks = pipeline_spec["root"]["dag"]["tasks"]
+
+        assert "evaluate-speculator" in tasks["speculative-decoding-serving"]["dependentTasks"]

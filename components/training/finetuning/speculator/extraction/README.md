@@ -6,8 +6,8 @@
 
 Extract verifier hidden states using managed or external vLLM.
 
-``dataset_name`` selects the source dataset. When regeneration is enabled, responses are regenerated through the verifier before hidden-state extraction. Managed mode uses the in-job vLLM sidecar; providing ``vllm_endpoint`` uses an external vLLM service and requires matching shared model and
-hidden-state paths.
+``dataset_name`` selects the source dataset. When regeneration is enabled, responses are regenerated through the verifier before hidden-state extraction. Managed mode uses the in-job vLLM sidecar. When model downloading is disabled, the managed sidecar uses ``verifier_model_pvc`` if provided. Remote
+mode uses an external vLLM service and requires matching shared model and hidden-state paths.
 
 ## Inputs 📥
 

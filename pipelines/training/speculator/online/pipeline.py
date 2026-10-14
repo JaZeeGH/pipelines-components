@@ -5,6 +5,7 @@ import kfp.kubernetes
 from kfp import dsl
 
 from components.data_processing.download_model import download_model
+from components.deployment.speculative_decoding_serving import speculative_decoding_serving
 from components.evaluation.speculator import evaluate_speculator
 from components.training.finetuning.speculator import online_speculator
 
@@ -36,7 +37,7 @@ def _attach_k8s(task) -> None:
 
 @dsl.pipeline(
     name=PIPELINE_NAME,
-    description="Train a Speculator model with managed vLLM in online mode.",
+    description="Train and evaluate a Speculator model, then serve it with vLLM.",
     pipeline_config=dsl.PipelineConfig(
         workspace=dsl.WorkspaceConfig(
             size=PVC_SIZE,
@@ -51,7 +52,10 @@ def _attach_k8s(task) -> None:
 )
 def speculator_online_pipeline(
     persistent_pvc: str,
-    evaluation_dataset_uri: str,
+    serving_namespace: str,
+    serving_runtime_image: str,
+    evaluation_dataset_uri: str = "RedHatAI/speculator_benchmarks",
+    serving_endpoint_name: str = "speculator-online",
     verifier_model: str = "Qwen/Qwen2.5-1.5B-Instruct",
     verifier_model_pvc: str = "models/Qwen--Qwen2.5-1.5B-Instruct",
     output_dir: str = "speculator-output",
@@ -94,16 +98,18 @@ def speculator_online_pipeline(
     pip_index_urls: str = "",
     training_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
     training_runtime: str = "vllm-extract-cuda",
-    evaluation_max_samples: int = 20,
+    evaluation_max_samples: int = 80,
     evaluation_max_tokens: int = 256,
     evaluation_temperature: float = 0.0,
     evaluation_num_speculative_tokens: int = 5,
     evaluation_gpu_memory_utilization: float = 0.9,
     evaluation_startup_timeout_seconds: int = 900,
-    evaluation_request_timeout_seconds: int = 600,
     evaluation_sample_seed: int = 42,
 ):
-    """Extract hidden states and train the draft model in one task."""
+    """Train, evaluate, and serve an Eagle3 speculative decoding model.
+
+    Serving requires the namespace and a verified vLLM runtime image pull spec.
+    """
     download_task = download_model(
         model_name=verifier_model,
         model_cache_pvc=persistent_pvc,
@@ -181,6 +187,7 @@ def speculator_online_pipeline(
         verifier_model=verifier_model_pvc,
         draft_model_path="/mnt/persistent/final_model",
         evaluation_dataset_uri=evaluation_dataset_uri,
+        evaluation_dataset_pvc=persistent_pvc,
         evaluation_speculator_type=speculator_type,
         evaluation_max_samples=evaluation_max_samples,
         evaluation_max_tokens=evaluation_max_tokens,
@@ -188,7 +195,6 @@ def speculator_online_pipeline(
         evaluation_num_speculative_tokens=evaluation_num_speculative_tokens,
         evaluation_gpu_memory_utilization=evaluation_gpu_memory_utilization,
         evaluation_startup_timeout_seconds=evaluation_startup_timeout_seconds,
-        evaluation_request_timeout_seconds=evaluation_request_timeout_seconds,
         evaluation_sample_seed=evaluation_sample_seed,
     )
     evaluation_task.after(task)
@@ -199,6 +205,22 @@ def speculator_online_pipeline(
     )
     evaluation_task.set_accelerator_type("nvidia.com/gpu")
     _attach_k8s(evaluation_task)
+
+    serving_task = speculative_decoding_serving(
+        namespace=serving_namespace,
+        endpoint_name=serving_endpoint_name,
+        model_cache_pvc=persistent_pvc,
+        verifier_model_dir=verifier_model_pvc,
+        draft_model_dir="final_model",
+        runtime_image=serving_runtime_image,
+        gpu_count=vllm_resource_gpu,
+        max_model_len=total_seq_len,
+        num_speculative_tokens=evaluation_num_speculative_tokens,
+        gpu_memory_utilization=evaluation_gpu_memory_utilization,
+    )
+    serving_task.after(evaluation_task)
+    serving_task.set_caching_options(False)
+    kfp.kubernetes.set_image_pull_policy(serving_task, "IfNotPresent")
 
 
 if __name__ == "__main__":

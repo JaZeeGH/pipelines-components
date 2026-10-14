@@ -6,17 +6,18 @@
 
 Extract verifier hidden states using managed or external vLLM.
 
-Managed mode starts a vLLM sidecar and uses ``verifier_model``. Remote mode calls an existing vLLM endpoint and uses ``verifier_model_pvc`` as the model path visible to that service. The dataset is processed and hidden states are written below ``output_dir`` on the configured storage.
+Managed mode starts a vLLM sidecar. When ``download_model`` is false, it uses ``verifier_model_pvc`` as the cached verifier path; when true, it downloads ``verifier_model`` to the PVC. Remote mode calls an existing vLLM endpoint and uses ``verifier_model_pvc`` as the model path visible to that
+service. Hidden states are written below ``output_dir`` on the configured storage.
 
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
 | `persistent_pvc` | `str` | `None` | RWX PVC for models, data, and hidden states. |
-| `download_model` | `bool` | `False` | Download the verifier to the PVC when True; reuse an existing model when False. |
+| `download_model` | `bool` | `False` | Download ``verifier_model`` to the PVC when True; otherwise use the cached ``verifier_model_pvc`` path in managed mode. |
 | `vllm_source` | `str` | `managed` | Choose ``managed`` sidecar or ``remote`` external vLLM. |
-| `verifier_model` | `str` | `Qwen/Qwen2.5-1.5B-Instruct` | Hugging Face verifier ID for managed mode. |
-| `verifier_model_pvc` | `str` | `models/Qwen--Qwen2.5-1.5B-Instruct` | PVC model path for remote mode. |
+| `verifier_model` | `str` | `""` | Hugging Face verifier ID to download; leave empty to reuse the PVC model. |
+| `verifier_model_pvc` | `str` | `models/Qwen--Qwen2.5-1.5B-Instruct` | Cached PVC model path for managed mode, or model path for remote mode. |
 | `output_dir` | `str` | `speculator-output` | PVC-relative output directory. |
 | `dataset_name` | `str` | `ultrachat` | Built-in ``magpie``, ``ultrachat``, ``gsm8k``, or a PVC JSON/JSONL URI. |
 | `hidden_states_path` | `str` | `speculator-output/hidden_states` | PVC hidden-state path for remote mode. |
