@@ -28,6 +28,7 @@ A local JSONL/PVC dataset may contain prompts, chat messages, or conversation re
 | `evaluation_gpu_memory_utilization` | `float` | `0.9` | vLLM GPU memory utilization fraction. |
 | `evaluation_port` | `int` | `8000` | Local port for the temporary vLLM endpoint. |
 | `evaluation_startup_timeout_seconds` | `int` | `900` | Maximum wait for the vLLM health endpoint. |
+| `evaluation_timeout_seconds` | `int` | `7200` | Maximum time allowed for the upstream evaluation sweep. |
 | `evaluation_sample_seed` | `int` | `42` | Seed used when sampling a local JSONL dataset. |
 | `evaluation_model_mount_path` | `str` | `/mnt/persistent` | Mount prefix for a relative verifier path. |
 | `evaluation_dataset_mount_path` | `str` | `/mnt/persistent` | Mount prefix for a relative dataset path. |
@@ -54,7 +55,7 @@ A local JSONL/PVC dataset may contain prompts, chat messages, or conversation re
   - speculator
   - speculative-decoding
   - metrics
-- **Last Verified**: 2026-10-14 00:00:00+00:00
+- **Last Verified**: 2026-10-15 00:00:00+00:00
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:

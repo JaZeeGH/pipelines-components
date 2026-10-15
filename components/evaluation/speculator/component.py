@@ -107,6 +107,43 @@ def _prepare_local_evaluation_dataset(
     return str(normalized_path), True, len(prompts)
 
 
+def _download_upstream_file(url: str, filename: str, attempts: int = 3) -> bytes:
+    """Download one upstream file with short retries for transient failures."""
+    import http.client
+    import time
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, headers={"User-Agent": "kfp-speculator-evaluator"})
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                contents = response.read()
+            if contents:
+                return contents
+            last_error = RuntimeError(f"Downloaded an empty upstream evaluation file: {filename}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 and not 500 <= exc.code < 600:
+                raise RuntimeError(f"Could not download upstream evaluation file {filename}: HTTP {exc.code}") from exc
+            last_error = exc
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+            last_error = exc
+
+        if attempt < attempts:
+            delay_seconds = attempt
+            print(
+                f"Download attempt {attempt}/{attempts} for {filename} failed: {last_error}; "
+                f"retrying in {delay_seconds}s",
+                flush=True,
+            )
+            time.sleep(delay_seconds)
+
+    raise RuntimeError(
+        f"Failed to download upstream evaluation file {filename} after {attempts} attempts"
+    ) from last_error
+
+
 def _download_upstream_evaluator(destination: str) -> str:
     """Download the pinned upstream evaluator and its adjacent Python modules.
 
@@ -115,7 +152,6 @@ def _download_upstream_evaluator(destination: str) -> str:
     command metadata, so use that exact pinned upstream module as a local
     compatibility namespace rather than installing an unavailable package.
     """
-    import urllib.request
     from pathlib import Path
 
     revision = "7883cd44264e6958cfc003963e5cdb895eb53bf1"
@@ -123,11 +159,7 @@ def _download_upstream_evaluator(destination: str) -> str:
     source_dir.mkdir(parents=True, exist_ok=True)
     for filename in ("evaluate.py", "perf_utils.py", "mrcr.py"):
         url = f"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/scripts/evaluate/{filename}"
-        request = urllib.request.Request(url, headers={"User-Agent": "kfp-speculator-evaluator"})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            contents = response.read()
-        if not contents:
-            raise RuntimeError(f"Downloaded an empty upstream evaluation file: {filename}")
+        contents = _download_upstream_file(url, filename)
         (source_dir / filename).write_bytes(contents)
     provenance_package = source_dir / "compat" / "speculators"
     provenance_package.mkdir(parents=True, exist_ok=True)
@@ -135,14 +167,7 @@ def _download_upstream_evaluator(destination: str) -> str:
     provenance_url = (
         f"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/src/speculators/provenance.py"
     )
-    provenance_request = urllib.request.Request(
-        provenance_url,
-        headers={"User-Agent": "kfp-speculator-evaluator"},
-    )
-    with urllib.request.urlopen(provenance_request, timeout=60) as response:
-        provenance_contents = response.read()
-    if not provenance_contents:
-        raise RuntimeError("Downloaded an empty upstream provenance helper")
+    provenance_contents = _download_upstream_file(provenance_url, "provenance.py")
     (provenance_package / "provenance.py").write_bytes(provenance_contents)
     return str(source_dir / "evaluate.py")
 
@@ -180,6 +205,16 @@ def _build_upstream_evaluate_command(
     ]
 
 
+def _run_upstream_evaluate(command: list[str], environment: dict[str, str], timeout_seconds: int) -> None:
+    """Run the pinned upstream sweep with a bounded timeout."""
+    import subprocess
+
+    try:
+        subprocess.run(command, check=True, env=environment, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"Upstream Speculators evaluation timed out after {timeout_seconds} seconds") from exc
+
+
 @dsl.component(
     base_image=(
         "quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@"
@@ -191,8 +226,10 @@ def _build_upstream_evaluate_command(
         _resolve_evaluation_dataset_path,
         _extract_evaluation_prompt,
         _prepare_local_evaluation_dataset,
+        _download_upstream_file,
         _download_upstream_evaluator,
         _build_upstream_evaluate_command,
+        _run_upstream_evaluate,
     ],
 )
 def evaluate_speculator(
@@ -210,6 +247,7 @@ def evaluate_speculator(
     evaluation_gpu_memory_utilization: float = 0.9,
     evaluation_port: int = 8000,
     evaluation_startup_timeout_seconds: int = 900,
+    evaluation_timeout_seconds: int = 7200,
     evaluation_sample_seed: int = 42,
     evaluation_model_mount_path: str = "/mnt/persistent",
     evaluation_dataset_mount_path: str = "/mnt/persistent",
@@ -241,6 +279,7 @@ def evaluate_speculator(
         evaluation_gpu_memory_utilization: vLLM GPU memory utilization fraction.
         evaluation_port: Local port for the temporary vLLM endpoint.
         evaluation_startup_timeout_seconds: Maximum wait for the vLLM health endpoint.
+        evaluation_timeout_seconds: Maximum time allowed for the upstream evaluation sweep.
         evaluation_sample_seed: Seed used when sampling a local JSONL dataset.
         evaluation_model_mount_path: Mount prefix for a relative verifier path.
         evaluation_dataset_mount_path: Mount prefix for a relative dataset path.
@@ -265,6 +304,8 @@ def evaluate_speculator(
         raise ValueError("evaluation_max_samples must be greater than zero")
     if evaluation_max_tokens <= 0:
         raise ValueError("evaluation_max_tokens must be greater than zero")
+    if evaluation_timeout_seconds <= 0:
+        raise ValueError("evaluation_timeout_seconds must be greater than zero")
 
     verifier_path = verifier_model
     if verifier_path.startswith("pvc://"):
@@ -345,7 +386,7 @@ def evaluate_speculator(
             local_dataset_path,
             subsets,
             str(results_dir),
-            evaluation_max_samples,
+            local_request_count if is_local_dataset else evaluation_max_samples,
             evaluation_max_tokens,
             evaluation_temperature,
         )
@@ -382,7 +423,7 @@ def evaluate_speculator(
             evaluator_environment["PYTHONPATH"] = (
                 compat_path if not existing_pythonpath else f"{compat_path}{os.pathsep}{existing_pythonpath}"
             )
-            subprocess.run(evaluate_command, check=True, env=evaluator_environment)
+            _run_upstream_evaluate(evaluate_command, evaluator_environment, evaluation_timeout_seconds)
         finally:
             stop_server()
 

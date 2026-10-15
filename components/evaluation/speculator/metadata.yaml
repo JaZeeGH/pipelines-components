@@ -16,6 +16,6 @@ tags:
   - speculator
   - speculative-decoding
   - metrics
-lastVerified: 2026-10-14T00:00:00Z
+lastVerified: 2026-10-15T00:00:00Z
 links:
   documentation: https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/evaluating_performance/

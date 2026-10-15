@@ -5,9 +5,11 @@ import json
 
 from ..component import (
     _build_upstream_evaluate_command,
+    _download_upstream_file,
     _extract_evaluation_prompt,
     _prepare_local_evaluation_dataset,
     _resolve_evaluation_dataset_path,
+    _run_upstream_evaluate,
     evaluate_speculator,
 )
 
@@ -34,6 +36,7 @@ def test_component_has_upstream_evaluation_parameters():
         "evaluation_num_speculative_tokens",
         "evaluation_speculator_type",
         "evaluation_startup_timeout_seconds",
+        "evaluation_timeout_seconds",
     ):
         assert name in params
 
@@ -45,6 +48,7 @@ def test_component_defaults_match_upstream_example():
     assert params["evaluation_max_tokens"].default == 256
     assert params["evaluation_temperature"].default == 0.0
     assert params["evaluation_num_speculative_tokens"].default == 5
+    assert params["evaluation_timeout_seconds"].default == 7200
 
 
 def test_local_chat_records_are_converted_to_user_prompts():
@@ -90,6 +94,53 @@ def test_huggingface_dataset_identifier_is_not_resolved_as_a_local_path(tmp_path
     assert count == 0
 
 
+def test_upstream_file_download_retries_transient_failures(monkeypatch):
+    """A transient CDN error is retried before the downloaded file is accepted."""
+    import io
+    import time
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def flaky_urlopen(request, timeout):
+        attempts.append(timeout)
+        if len(attempts) < 3:
+            raise urllib.error.URLError("temporary CDN failure")
+        return io.BytesIO(b"upstream evaluator")
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    contents = _download_upstream_file("https://example.com/evaluate.py", "evaluate.py")
+
+    assert contents == b"upstream evaluator"
+    assert attempts == [60, 60, 60]
+
+
+def test_upstream_file_download_fails_after_retry_limit(monkeypatch):
+    """Repeated transient download failures produce a clear component error."""
+    import time
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def failing_urlopen(request, timeout):
+        attempts.append(timeout)
+        raise urllib.error.URLError("temporary CDN failure")
+
+    monkeypatch.setattr(urllib.request, "urlopen", failing_urlopen)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Failed to download upstream evaluation file evaluate.py after 3 attempts"):
+        _download_upstream_file("https://example.com/evaluate.py", "evaluate.py")
+
+    assert attempts == [60, 60, 60]
+
+
 def test_upstream_command_runs_sweep_against_vllm_endpoint(tmp_path):
     """The command uses Fynn's endpoint-based full-performance workflow."""
     command = _build_upstream_evaluate_command(
@@ -110,12 +161,28 @@ def test_upstream_command_runs_sweep_against_vllm_endpoint(tmp_path):
     assert command[-1] == "sweep"
 
 
+def test_upstream_evaluation_timeout_raises_clear_error(monkeypatch):
+    """A stalled upstream sweep fails with a useful timeout error."""
+    import subprocess
+
+    def raise_timeout(command, check, env, timeout):
+        assert timeout == 30
+        raise subprocess.TimeoutExpired(command, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+
+    import pytest
+
+    with pytest.raises(TimeoutError, match="timed out after 30 seconds"):
+        _run_upstream_evaluate(["python", "evaluate.py", "sweep"], {}, 30)
+
+
 def test_component_uses_upstream_script_and_no_custom_baseline_loop():
     """The component launches one speculative endpoint and delegates evaluation upstream."""
     source = inspect.getsource(evaluate_speculator.python_func)
     assert "_download_upstream_evaluator" in source
     assert "_build_upstream_evaluate_command" in source
-    assert "subprocess.run(evaluate_command, check=True, env=evaluator_environment)" in source
+    assert "_run_upstream_evaluate" in source
     assert "baseline_seconds" not in source
     assert "run_requests" not in source
 
