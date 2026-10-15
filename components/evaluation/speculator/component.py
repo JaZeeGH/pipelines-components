@@ -341,7 +341,10 @@ def evaluate_speculator(
             try:
                 server_process.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                server_process.kill()
+                try:
+                    os.killpg(server_process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 server_process.wait()
         server_process = None
 

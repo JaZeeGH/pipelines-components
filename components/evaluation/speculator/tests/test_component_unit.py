@@ -183,6 +183,8 @@ def test_component_uses_upstream_script_and_no_custom_baseline_loop():
     assert "_download_upstream_evaluator" in source
     assert "_build_upstream_evaluate_command" in source
     assert "_run_upstream_evaluate" in source
+    assert "os.killpg(server_process.pid, signal.SIGKILL)" in source
+    assert "server_process.kill()" not in source
     assert "baseline_seconds" not in source
     assert "run_requests" not in source
 

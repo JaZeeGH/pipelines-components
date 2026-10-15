@@ -74,6 +74,11 @@ mode uses an external vLLM service and requires matching shared model and hidden
     - ChughShilpa
     - efazal
     - hrathina
+    - JaZeeGH
+    - Sridhar1030
+  - Reviewers:
+    - ChughShilpa
+    - hrathina
 
 ## Additional Resources 📚
 

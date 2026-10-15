@@ -62,6 +62,11 @@ A local JSONL/PVC dataset may contain prompts, chat messages, or conversation re
     - ChughShilpa
     - efazal
     - hrathina
+    - JaZeeGH
+    - Sridhar1030
+  - Reviewers:
+    - ChughShilpa
+    - hrathina
 
 ## Additional Resources 📚
 
