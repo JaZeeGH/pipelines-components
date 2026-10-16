@@ -130,6 +130,8 @@ Whole-repo: `make lint` (check) or `make format` (fix).
 | Base images | [`validate_base_images/README.md`](scripts/validate_base_images/README.md) | [`base-image-check.yml`](.github/workflows/base-image-check.yml) |
 | README sync | [`generate_readme/README.md`](scripts/generate_readme/README.md) | [`readme-check.yml`](.github/workflows/readme-check.yml) |
 
+The metadata schema accepts optional boolean `ci.compile_check` and `ci.skip_dependency_probe` flags.
+
 ### Tests
 
 Follow the canonical testing guidance:

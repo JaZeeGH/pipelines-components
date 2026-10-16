@@ -238,6 +238,7 @@ tags:  # Optional keywords for discoverability
   - evaluation
 lastVerified: 2025-11-18T00:00:00Z  # Updated annually; components are removed after 12 months without update
 ci:
+  compile_check: true          # Optional. Compile this asset in CI.
   skip_dependency_probe: false   # Optional. Set true only with justification
 links:  # Optional, can use custom key-value (not limited to documentation, issue_tracker)
   documentation: https://kubeflow.org/components/my_component

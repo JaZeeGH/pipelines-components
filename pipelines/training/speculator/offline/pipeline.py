@@ -4,6 +4,7 @@ import kfp
 import kfp.kubernetes
 from kfp import dsl
 
+from components.deployment.kubeflow_model_registry import kubeflow_model_registry
 from components.deployment.speculative_decoding_serving import speculative_decoding_serving
 from components.evaluation.speculator import evaluate_speculator
 from components.training.finetuning.speculator import extract_speculator, train_speculator_mode
@@ -36,7 +37,9 @@ def _attach_k8s(task) -> None:
 
 @dsl.pipeline(
     name=PIPELINE_NAME,
-    description="Extract and train a Speculator model with external vLLM, then serve it.",
+    description=(
+        "Extract hidden states with external vLLM, then train, evaluate, register, and serve a Speculator model."
+    ),
     pipeline_config=dsl.PipelineConfig(
         workspace=dsl.WorkspaceConfig(
             size=PVC_SIZE,
@@ -54,6 +57,10 @@ def speculator_offline_pipeline(
     serving_namespace: str,
     serving_runtime_image: str,
     evaluation_dataset_uri: str = "RedHatAI/speculator_benchmarks",
+    model_registry_address: str = "",
+    model_registry_port: int = 8080,
+    model_registry_name: str = "speculator-offline-draft",
+    model_registry_version: str = "1.0.0",
     serving_endpoint_name: str = "speculator-offline",
     verifier_model: str = "models/Qwen--Qwen2.5-1.5B-Instruct",
     output_dir: str = "speculator-output",
@@ -83,7 +90,6 @@ def speculator_offline_pipeline(
     training_save_best: bool = False,
     training_log_freq: int = 1,
     training_resume_from_checkpoint: bool = False,
-    training_from_pretrained: str = "",
     training_resource_cpu: str = "4",
     training_resource_gpu: int = 1,
     training_resource_memory: str = "64Gi",
@@ -102,8 +108,10 @@ def speculator_offline_pipeline(
     evaluation_startup_timeout_seconds: int = 900,
     evaluation_sample_seed: int = 42,
 ):
-    """Extract hidden states, train and evaluate the draft, then serve it.
+    """Extract hidden states, train and evaluate the draft, register it, then serve it.
 
+    Set `model_registry_address` and `model_registry_port` to connect to Model Registry.
+    Registration is skipped when the address is empty; increment `model_registry_version` for each new version.
     Serving requires the namespace and a verified vLLM runtime image pull spec.
     """
     extract_task = extract_speculator(
@@ -159,7 +167,6 @@ def speculator_offline_pipeline(
         training_save_best=training_save_best,
         training_log_freq=training_log_freq,
         training_resume_from_checkpoint=training_resume_from_checkpoint,
-        training_from_pretrained=training_from_pretrained,
         training_resource_cpu=training_resource_cpu,
         training_resource_gpu=training_resource_gpu,
         training_resource_memory=training_resource_memory,
@@ -204,6 +211,32 @@ def speculator_offline_pipeline(
     evaluation_task.set_accelerator_type("nvidia.com/gpu")
     _attach_k8s(evaluation_task)
 
+    model_registry_task = kubeflow_model_registry(
+        pvc_mount_path="/mnt/persistent",
+        input_model=task.outputs["output_model"],
+        input_metrics=task.outputs["output_metrics"],
+        eval_metrics=evaluation_task.outputs["output_metrics"],
+        eval_results=evaluation_task.outputs["output_results"],
+        registry_address=model_registry_address,
+        registry_port=model_registry_port,
+        model_name=model_registry_name,
+        model_version=model_registry_version,
+        model_description="Speculator draft model trained by the offline pipeline.",
+        shared_log_file="pipeline_log.txt",
+        source_pipeline_name=PIPELINE_NAME,
+        source_pipeline_run_id=dsl.PIPELINE_JOB_ID_PLACEHOLDER,
+        source_pipeline_run_name=dsl.PIPELINE_JOB_NAME_PLACEHOLDER,
+        source_namespace="",
+    )
+    model_registry_task.after(evaluation_task)
+    kfp.kubernetes.mount_pvc(
+        model_registry_task,
+        pvc_name=persistent_pvc,
+        mount_path="/mnt/persistent",
+    )
+    model_registry_task.set_caching_options(False)
+    kfp.kubernetes.set_image_pull_policy(model_registry_task, "IfNotPresent")
+
     serving_task = speculative_decoding_serving(
         namespace=serving_namespace,
         endpoint_name=serving_endpoint_name,
@@ -213,7 +246,7 @@ def speculator_offline_pipeline(
         runtime_image=serving_runtime_image,
         max_model_len=total_seq_len,
     )
-    serving_task.after(evaluation_task)
+    serving_task.after(model_registry_task)
     serving_task.set_caching_options(False)
     kfp.kubernetes.set_image_pull_policy(serving_task, "IfNotPresent")
 

@@ -68,6 +68,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "compile_check": {
+          "type": "boolean",
+          "description": "Include this component or pipeline in CI compilation checks."
+        },
         "skip_dependency_probe": {
           "type": "boolean"
         }

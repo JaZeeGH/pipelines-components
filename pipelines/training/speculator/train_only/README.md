@@ -4,9 +4,9 @@
 
 ## Overview 🧾
 
-Train, evaluate, and serve a draft model from pre-extracted hidden states.
+Train, evaluate, register, and serve a draft model from pre-extracted hidden states.
 
-Serving requires the namespace and a verified vLLM runtime image pull spec.
+Set `model_registry_address` and `model_registry_port` to connect to Model Registry. Registration is skipped when the address is empty; increment `model_registry_version` for each new version. Serving requires the namespace and a verified vLLM runtime image pull spec.
 
 ## Inputs 📥
 
@@ -16,6 +16,10 @@ Serving requires the namespace and a verified vLLM runtime image pull spec.
 | `serving_namespace` | `str` | `None` |  |
 | `serving_runtime_image` | `str` | `None` |  |
 | `evaluation_dataset_uri` | `str` | `RedHatAI/speculator_benchmarks` |  |
+| `model_registry_address` | `str` | `""` |  |
+| `model_registry_port` | `int` | `8080` |  |
+| `model_registry_name` | `str` | `speculator-train-only-draft` |  |
+| `model_registry_version` | `str` | `1.0.0` |  |
 | `serving_endpoint_name` | `str` | `speculator-train-only` |  |
 | `verifier_model` | `str` | `Qwen/Qwen2.5-1.5B-Instruct` |  |
 | `verifier_model_pvc` | `str` | `models/Qwen--Qwen2.5-1.5B-Instruct` |  |
@@ -42,7 +46,6 @@ Serving requires the namespace and a verified vLLM runtime image pull spec.
 | `training_save_best` | `bool` | `False` |  |
 | `training_log_freq` | `int` | `1` |  |
 | `training_resume_from_checkpoint` | `bool` | `False` |  |
-| `training_from_pretrained` | `str` | `""` |  |
 | `training_resource_cpu` | `str` | `4` |  |
 | `training_resource_gpu` | `int` | `1` |  |
 | `training_resource_memory` | `str` | `64Gi` |  |
@@ -76,7 +79,7 @@ Serving requires the namespace and a verified vLLM runtime image pull spec.
   - speculator
   - speculative_decoding
   - pipeline
-- **Last Verified**: 2026-09-08 00:00:00+00:00
+- **Last Verified**: 2026-10-15 00:00:00+00:00
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:

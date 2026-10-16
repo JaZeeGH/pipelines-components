@@ -227,6 +227,14 @@ def test_validate_metadata_yaml_success(test_data):
             ),
         ),
         ValidateMetadataTestFile(
+            file_name="invalid_ci_compile_check.yaml",
+            expected_exception=ValidationError,
+            expected_exception_msg=(
+                r"File '.*/invalid_ci_compile_check\.yaml'.*"
+                r"'true' is not of type 'boolean'"
+            ),
+        ),
+        ValidateMetadataTestFile(
             file_name="invalid_links.yaml",
             expected_exception=ValidationError,
             expected_exception_msg=(

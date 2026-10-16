@@ -14,7 +14,7 @@ tags:
   - speculator
   - speculative_decoding
   - pipeline
-lastVerified: 2026-09-08T00:00:00Z
+lastVerified: 2026-10-15T00:00:00Z
 ci:
   compile_check: true
 links:
