@@ -197,12 +197,12 @@ def test_component_checks_vllm_binary():
 
 
 def test_component_resolves_dataset_uri_against_mounted_pvc():
-    """PVC URIs resolve to the correct path on the shared mount."""
+    """Mounted PVC URIs and relative paths resolve under the configured mount."""
     mount_path = "/mnt/persistent"
 
     assert (
         _resolve_evaluation_dataset_path(
-            "pvc://models/ultrachat.jsonl",
+            "models/ultrachat.jsonl",
             mount_path,
             "shared",
         )
@@ -216,3 +216,33 @@ def test_component_resolves_dataset_uri_against_mounted_pvc():
         )
         == "/mnt/persistent/models/ultrachat.jsonl"
     )
+
+
+def test_dataset_resolver_rejects_mismatched_pvc_claim():
+    """PVC URIs must identify the mounted claim rather than another PVC."""
+    import pytest
+
+    with pytest.raises(ValueError, match="mounted PVC is 'shared'"):
+        _resolve_evaluation_dataset_path("pvc://other/models/data.jsonl", "/mnt/persistent", "shared")
+
+
+def test_dataset_resolver_rejects_path_traversal(tmp_path):
+    """Relative and absolute paths cannot escape the configured mount root."""
+    import pytest
+
+    with pytest.raises(ValueError, match="outside mounted PVC"):
+        _resolve_evaluation_dataset_path("../outside.jsonl", str(tmp_path), "shared")
+    with pytest.raises(ValueError, match="outside mounted PVC"):
+        _resolve_evaluation_dataset_path(str(tmp_path.parent / "outside.jsonl"), str(tmp_path), "shared")
+
+
+def test_dataset_resolver_rejects_symlink_escape(tmp_path):
+    """Symlinks are canonicalized before enforcing the mount boundary."""
+    import pytest
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (tmp_path / "escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="outside mounted PVC"):
+        _resolve_evaluation_dataset_path("escape/data.jsonl", str(tmp_path), "shared")

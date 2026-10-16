@@ -10,17 +10,19 @@ The component starts vLLM with the verifier and draft model, then runs the pinne
 
 A local JSONL/PVC dataset may contain prompts, chat messages, or conversation records. Local records are normalized to prompt JSONL and deterministically capped at ``evaluation_max_samples``. A Hugging Face dataset ID is passed directly to the upstream script, using its HumanEval example subset.
 
+Use paths relative to the configured mount without a PVC prefix. With ``pvc://`` syntax, prefix the path with the exact mounted claim name; for example, use ``pvc://shared/models/ultrachat.jsonl`` when the claim is ``shared``.
+
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
 | `output_metrics` | `dsl.Output[dsl.Metrics]` | `None` | KFP metrics for acceptance and sweep performance results. |
 | `output_results` | `dsl.Output[dsl.Artifact]` | `None` | Directory artifact containing upstream CSVs and raw GuideLLM output. |
-| `verifier_model` | `str` | `None` | Local or PVC-relative verifier model path. |
-| `draft_model_path` | `str` | `None` | Local path to the trained draft model. |
-| `evaluation_dataset_uri` | `str` | `None` | Hugging Face dataset ID or local/PVC JSONL path. |
+| `verifier_model` | `str` | `None` | Verifier directory under the model mount, optionally using pvc://<claim>/<path> syntax. |
+| `draft_model_path` | `str` | `None` | Draft directory under the model mount, optionally using pvc://<claim>/<path> syntax. |
+| `evaluation_dataset_uri` | `str` | `None` | Hugging Face dataset ID, relative path under the dataset mount, or ``pvc://<claim>/<path>``. |
 | `evaluation_speculator_type` | `str` | `None` | Speculator method configured on the vLLM server. |
-| `evaluation_dataset_pvc` | `str` | `""` | PVC name used to resolve ``pvc://`` dataset URIs. |
+| `evaluation_dataset_pvc` | `str` | `""` | Mounted PVC claim name. Every ``pvc://`` URI must use this exact claim name; relative paths need no PVC prefix. |
 | `evaluation_max_samples` | `int` | `80` | Maximum GuideLLM requests at each sweep point. |
 | `evaluation_max_tokens` | `int` | `256` | Maximum generation tokens for each request. |
 | `evaluation_temperature` | `float` | `0.0` | Sampling temperature passed through to GuideLLM. |
@@ -30,8 +32,8 @@ A local JSONL/PVC dataset may contain prompts, chat messages, or conversation re
 | `evaluation_startup_timeout_seconds` | `int` | `900` | Maximum wait for the vLLM health endpoint. |
 | `evaluation_timeout_seconds` | `int` | `7200` | Maximum time allowed for the upstream evaluation sweep. |
 | `evaluation_sample_seed` | `int` | `42` | Seed used when sampling a local JSONL dataset. |
-| `evaluation_model_mount_path` | `str` | `/mnt/persistent` | Mount prefix for a relative verifier path. |
-| `evaluation_dataset_mount_path` | `str` | `/mnt/persistent` | Mount prefix for a relative dataset path. |
+| `evaluation_model_mount_path` | `str` | `/mnt/persistent` | Root directory for verifier and draft models; resolved paths must stay inside it. |
+| `evaluation_dataset_mount_path` | `str` | `/mnt/persistent` | Root directory for local datasets; resolved paths must stay inside it. |
 
 ## Outputs 📤
 

@@ -4,19 +4,30 @@ from kfp import dsl
 
 
 def _resolve_evaluation_dataset_path(uri: str, mount_path: str, persistent_pvc: str = "") -> str:
-    """Resolve a PVC URI or relative dataset path under the mounted PVC."""
+    """Resolve a mounted-PVC path and reject traversal or mismatched PVC URIs."""
     import os
 
     path = uri
     if path.startswith("pvc://"):
-        path = path.removeprefix("pvc://")
-        if persistent_pvc and path == persistent_pvc:
+        pvc_uri = path.removeprefix("pvc://")
+        pvc_name, separator, path = pvc_uri.partition("/")
+        if not persistent_pvc:
+            raise ValueError("A mounted PVC name is required to resolve pvc:// URIs")
+        if pvc_name != persistent_pvc:
+            raise ValueError(f"PVC URI references claim {pvc_name!r}, but the mounted PVC is {persistent_pvc!r}")
+        if not separator:
             path = ""
-        elif persistent_pvc and path.startswith(f"{persistent_pvc}/"):
-            path = path[len(persistent_pvc) + 1 :]
-        elif not persistent_pvc:
-            path = path.split("/", 1)[-1]
-    return path if os.path.isabs(path) else os.path.join(mount_path, path)
+
+    mount_root = os.path.realpath(mount_path)
+    candidate = path if os.path.isabs(path) else os.path.join(mount_root, path)
+    resolved_path = os.path.realpath(candidate)
+    try:
+        common_path = os.path.commonpath((mount_root, resolved_path))
+    except ValueError as exc:
+        raise ValueError(f"Path {uri!r} resolves outside mounted PVC {mount_root!r}") from exc
+    if common_path != mount_root:
+        raise ValueError(f"Path {uri!r} resolves outside mounted PVC {mount_root!r}")
+    return resolved_path
 
 
 def _extract_evaluation_prompt(record: object) -> str:
@@ -56,6 +67,7 @@ def _prepare_local_evaluation_dataset(
     Returns the original URI unchanged when it is an upstream dataset ID.
     """
     import json
+    import os
     import random
     from pathlib import Path
 
@@ -64,13 +76,10 @@ def _prepare_local_evaluation_dataset(
     if max_requests <= 0:
         raise ValueError("evaluation_max_samples must be greater than zero")
 
-    direct_path = Path(uri)
-    if uri.startswith("pvc://"):
+    if uri.startswith("pvc://") or os.path.isabs(uri):
         dataset_path = Path(_resolve_evaluation_dataset_path(uri, mount_path, persistent_pvc))
         if not dataset_path.exists():
             raise FileNotFoundError(f"Evaluation dataset was not found on the PVC: {dataset_path}")
-    elif direct_path.exists():
-        dataset_path = direct_path
     else:
         mounted_path = Path(_resolve_evaluation_dataset_path(uri, mount_path, persistent_pvc))
         if not mounted_path.exists():
@@ -264,14 +273,21 @@ def evaluate_speculator(
     capped at ``evaluation_max_samples``. A Hugging Face dataset ID is passed
     directly to the upstream script, using its HumanEval example subset.
 
+    Use paths relative to the configured mount without a PVC prefix. With
+    ``pvc://`` syntax, prefix the path with the exact mounted claim name; for
+    example, use ``pvc://shared/models/ultrachat.jsonl`` when the claim is
+    ``shared``.
+
     Args:
         output_metrics: KFP metrics for acceptance and sweep performance results.
         output_results: Directory artifact containing upstream CSVs and raw GuideLLM output.
-        verifier_model: Local or PVC-relative verifier model path.
-        draft_model_path: Local path to the trained draft model.
-        evaluation_dataset_uri: Hugging Face dataset ID or local/PVC JSONL path.
+        verifier_model: Verifier directory under the model mount, optionally using pvc://<claim>/<path> syntax.
+        draft_model_path: Draft directory under the model mount, optionally using pvc://<claim>/<path> syntax.
+        evaluation_dataset_uri: Hugging Face dataset ID, relative path under the dataset mount, or
+            ``pvc://<claim>/<path>``.
         evaluation_speculator_type: Speculator method configured on the vLLM server.
-        evaluation_dataset_pvc: PVC name used to resolve ``pvc://`` dataset URIs.
+        evaluation_dataset_pvc: Mounted PVC claim name. Every ``pvc://`` URI must use this exact
+            claim name; relative paths need no PVC prefix.
         evaluation_max_samples: Maximum GuideLLM requests at each sweep point.
         evaluation_max_tokens: Maximum generation tokens for each request.
         evaluation_temperature: Sampling temperature passed through to GuideLLM.
@@ -281,8 +297,8 @@ def evaluate_speculator(
         evaluation_startup_timeout_seconds: Maximum wait for the vLLM health endpoint.
         evaluation_timeout_seconds: Maximum time allowed for the upstream evaluation sweep.
         evaluation_sample_seed: Seed used when sampling a local JSONL dataset.
-        evaluation_model_mount_path: Mount prefix for a relative verifier path.
-        evaluation_dataset_mount_path: Mount prefix for a relative dataset path.
+        evaluation_model_mount_path: Root directory for verifier and draft models; resolved paths must stay inside it.
+        evaluation_dataset_mount_path: Root directory for local datasets; resolved paths must stay inside it.
     """
     import csv
     import json
@@ -307,14 +323,16 @@ def evaluate_speculator(
     if evaluation_timeout_seconds <= 0:
         raise ValueError("evaluation_timeout_seconds must be greater than zero")
 
-    verifier_path = verifier_model
-    if verifier_path.startswith("pvc://"):
-        verifier_path = verifier_path.removeprefix("pvc://").split("/", 1)[-1]
-    if not os.path.isabs(verifier_path):
-        verifier_path = os.path.join(evaluation_model_mount_path, verifier_path)
-    draft_path = draft_model_path
-    if not os.path.isabs(draft_path):
-        draft_path = os.path.join(evaluation_model_mount_path, draft_path)
+    verifier_path = _resolve_evaluation_dataset_path(
+        verifier_model,
+        evaluation_model_mount_path,
+        evaluation_dataset_pvc,
+    )
+    draft_path = _resolve_evaluation_dataset_path(
+        draft_model_path,
+        evaluation_model_mount_path,
+        evaluation_dataset_pvc,
+    )
     if not os.path.isdir(verifier_path):
         raise FileNotFoundError(f"Verifier model directory does not exist: {verifier_path}")
     if not os.path.isdir(draft_path):
