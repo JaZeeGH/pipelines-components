@@ -1,3 +1,4 @@
+---
 name: speculator_data_only_pipeline
 stability: alpha
 dependencies:
