@@ -37,10 +37,31 @@ class TestSpeculatorRuntime:
         assert "no KFP output artifact is wired" in source
 
     def test_runtime_rejects_empty_vllm_endpoint(self):
-        """Verify an empty endpoint cannot silently select managed mode."""
+        """Verify runtime validates endpoint configuration before selecting a runtime."""
         source = inspect.getsource(speculator.run_speculator)
-        assert 'values.get("vllm_endpoint") == ""' in source
-        assert "must be omitted/None for managed vLLM" in source
+        assert 'values["vllm_endpoint"] = _validate_vllm_configuration(' in source
+
+    @pytest.mark.parametrize(
+        ("vllm_source", "endpoint", "expected"),
+        [
+            ("managed", None, None),
+            ("managed", "", None),
+            ("remote", "http://vllm.example.test:8000", "http://vllm.example.test:8000"),
+            ("remote", " https://vllm.example.test:443 ", "https://vllm.example.test:443"),
+        ],
+    )
+    def test_vllm_configuration_accepts_only_matching_source_endpoint(self, vllm_source, endpoint, expected):
+        """Normalize whitespace while preserving managed and remote endpoint modes."""
+        assert speculator._validate_vllm_configuration(vllm_source, endpoint) == expected
+
+    @pytest.mark.parametrize(
+        ("vllm_source", "endpoint"),
+        [("remote", None), ("remote", "  "), ("managed", "http://vllm.example.test:8000")],
+    )
+    def test_vllm_configuration_rejects_inconsistent_source_endpoint(self, vllm_source, endpoint):
+        """Remote mode requires an endpoint; managed mode rejects one."""
+        with pytest.raises(ValueError, match="vllm_endpoint"):
+            speculator._validate_vllm_configuration(vllm_source, endpoint)
 
     def test_runtime_validates_raw_verifier_for_external_vllm(self):
         """Verify external vLLM validates PVC-backed paths after URI normalization."""

@@ -75,6 +75,50 @@ class TestSpeculatorExtractionComponent:
         values = run_speculator.call_args.args[1]
         assert values["verifier_model"] == "Qwen/Qwen3-0.6B"
 
+    @pytest.mark.parametrize("endpoint", [None, "", "   "])
+    def test_remote_mode_requires_a_vllm_endpoint(self, tmp_path, endpoint):
+        """Remote extraction fails early instead of silently selecting managed vLLM."""
+        with pytest.raises(ValueError, match="vllm_endpoint is required when vllm_source='remote'"):
+            extract_speculator.python_func(
+                verifier_model="models/Qwen3-0.6B",
+                output_dir="speculator-output",
+                pvc_path="/workspace",
+                dataset_name="ultrachat",
+                persistent_pvc="shared",
+                persistent_mount_path=str(tmp_path / "shared"),
+                vllm_source="remote",
+                vllm_endpoint=endpoint,
+            )
+
+    def test_managed_mode_rejects_an_external_vllm_endpoint(self):
+        """A configured endpoint cannot be ignored by managed extraction."""
+        with pytest.raises(ValueError, match="must be omitted when vllm_source='managed'"):
+            extract_speculator.python_func(
+                verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
+                output_dir="speculator-output",
+                pvc_path="/workspace",
+                dataset_name="ultrachat",
+                vllm_source="managed",
+                vllm_endpoint="http://vllm.example.test:8000",
+            )
+
+    def test_remote_mode_trims_endpoint_whitespace(self, monkeypatch):
+        """A non-empty remote endpoint is forwarded without surrounding whitespace."""
+        run_speculator = _mock_run_speculator(monkeypatch)
+
+        extract_speculator.python_func(
+            verifier_model="pvc://shared/models/Qwen3-0.6B",
+            output_dir="speculator-output",
+            pvc_path="/workspace",
+            dataset_name="ultrachat",
+            persistent_pvc="shared",
+            vllm_source="remote",
+            vllm_endpoint=" http://vllm.example.test:8000 ",
+        )
+
+        values = run_speculator.call_args.args[1]
+        assert values["vllm_endpoint"] == "http://vllm.example.test:8000"
+
     def test_relative_jsonl_path_resolves_under_shared_pvc(self, tmp_path, monkeypatch):
         """Relative JSONL paths become Trainer PVC URIs rooted at the shared mount."""
         pvc_root = tmp_path / "shared"

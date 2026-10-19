@@ -59,27 +59,76 @@ def extract_speculator(
     output_hidden_states: dsl.Output[dsl.Artifact] = None,
     kubernetes_config: dsl.TaskConfig = None,
 ) -> str:
-    """Extract verifier hidden states using managed or external vLLM.
+    """Extract verifier hidden states with managed or remote vLLM.
 
-    ``dataset_name`` selects the source dataset. When regeneration is enabled,
-    responses are regenerated through the verifier before hidden-state extraction.
-    Managed mode uses the in-job vLLM sidecar. When model downloading is disabled,
-    the managed sidecar uses ``verifier_model_pvc`` if provided. Remote mode uses
-    an external vLLM service and requires matching shared model and hidden-state paths.
-    Relative and absolute JSON/JSONL paths under ``persistent_mount_path`` are
-    resolved to a PVC URI before the Trainer job starts. Existing
-    ``pvc://<claim>/<path>`` dataset references retain their Trainer URI semantics.
+    Dataset handling:
+        Supported built-in names are ``magpie`` (Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered),
+        ``ultrachat`` (HuggingFaceH4/ultrachat_200k), and ``gsm8k`` (openai/gsm8k).
+        For custom data, use a local JSON/JSONL file under ``persistent_mount_path``;
+        relative and absolute paths are converted to a Trainer PVC URI. Existing
+        ``pvc://<claim>/<path>`` values keep their Trainer URI semantics. Arbitrary
+        Hugging Face dataset IDs are not supported. When ``dataset_download_enabled``
+        is true, ``downloaded_dataset_uri`` is used.
+        If response regeneration is enabled, responses are generated with the verifier.
 
-    ``verifier_model_pvc``, ``output_dir``, and ``hidden_states_path`` accept
-    paths relative to the configured PVC mount or explicit
-    ``pvc://<claim>/<path>`` Trainer URIs. For example, with
-    ``persistent_pvc="shared"``, ``verifier_model_pvc="models/verifier"`` and
-    ``verifier_model_pvc="pvc://shared/models/verifier"`` identify the same model;
-    ``output_dir="speculator-output"`` and ``output_dir="pvc://shared/speculator-output"``
-    identify the same directory; ``hidden_states_path="speculator-output/hidden_states"``
-    and ``hidden_states_path="pvc://shared/speculator-output/hidden_states"`` identify
-    the same hidden-state path. Relative paths use ``persistent_pvc`` when supplied,
-    otherwise the KFP workspace PVC.
+    vLLM mode:
+        ``vllm_source="managed"`` uses an in-job sidecar. If ``download_model`` is
+        false and ``verifier_model_pvc`` is set, the cached model path is used.
+        Managed mode requires ``vllm_endpoint`` to be unset or blank.
+        ``vllm_source="remote"`` requires a non-empty ``vllm_endpoint`` and
+        PVC-backed verifier and hidden-state paths accessible to the external
+        server. A missing remote endpoint raises an error; it never falls back to
+        the managed sidecar. PVC-backed verifier models require exactly four
+        ``target_layer_ids``; remote vLLM also requires them.
+
+    PVC paths:
+        ``verifier_model_pvc``, ``output_dir``, and ``hidden_states_path`` accept
+        relative paths or explicit ``pvc://<claim>/<path>`` Trainer URIs. Relative
+        paths resolve against ``persistent_pvc`` when set, or the KFP workspace PVC
+        otherwise.
+
+    For example, with ``persistent_pvc="shared"``, the relative
+    ``verifier_model_pvc="models/verifier"`` is equivalent to
+    ``pvc://shared/models/verifier``. The same applies to
+    ``output_dir="speculator-output"`` and
+    ``hidden_states_path="speculator-output/hidden_states"``.
+
+    Args:
+        verifier_model: Hugging Face verifier ID to download, or the verifier path used by the runtime.
+        output_dir: Output directory as a relative PVC path or an explicit ``pvc://<claim>/<path>`` URI.
+        pvc_path: KFP workspace mount path used to resolve the workspace PVC.
+        dataset_name: ``magpie``, ``ultrachat``, ``gsm8k``, local JSON/JSONL path, or Trainer PVC URI.
+        verifier_model_pvc: Cached verifier path as a relative PVC path or explicit PVC URI.
+        vllm_source: ``managed`` for the in-job sidecar or ``remote`` for an external vLLM service.
+        dataset_download_enabled: Use the downloaded dataset URI instead of ``dataset_name``.
+        downloaded_dataset_uri: URI emitted by the dataset download step when enabled.
+        hidden_states_path: Hidden-state directory as a relative PVC path or explicit PVC URI.
+        vllm_endpoint: Required remote vLLM URL; unset for managed mode.
+        total_seq_len: Maximum sequence length for dataset preprocessing and vLLM extraction; must be positive.
+        speculator_type: Draft architecture; ``eagle3`` is currently the only supported type.
+        target_layer_ids: Exactly four comma-separated verifier layer IDs; required
+            for PVC-backed models and external vLLM.
+        data_extraction_max_samples: Number of samples to process; zero or None means all.
+        data_extraction_regenerate_responses: Regenerate responses for ``magpie``,
+            ``ultrachat``, or ``gsm8k`` with the verifier.
+        data_extraction_concurrency: Number of concurrent vLLM requests for hidden-state extraction.
+        vllm_resource_gpu: GPUs requested by managed vLLM; the SDK supports exactly one.
+        vllm_resource_memory: Memory requested by managed vLLM.
+        vllm_gpu_memory_utilization: Fraction of GPU memory available to vLLM, in the range ``(0, 1]``.
+        vllm_readiness_timeout_minutes: Maximum wait for the managed or remote vLLM
+            endpoint to become ready, in minutes.
+        enable_progression_tracking: Enable progress reporting.
+        metrics_port: HTTP port for extraction metrics; valid range is ``1024``-``65535``.
+        metrics_poll_interval_seconds: Seconds between metrics polls; valid range is ``5``-``300``.
+        packages_to_install: Comma-separated packages for the Trainer job.
+        pip_index_urls: Comma-separated package indexes for the Trainer job.
+        training_envs: Comma-separated environment overrides for the Trainer job.
+        training_runtime: ClusterTrainingRuntime used for extraction.
+        persistent_pvc: Name of the shared PVC mounted at ``persistent_mount_path``.
+        persistent_mount_path: Local mount path corresponding to ``persistent_pvc``.
+        download_model: Download the verifier model to the shared PVC before extraction.
+        output_hidden_states: Optional KFP artifact for the extracted hidden states.
+        kubernetes_config: KFP task Kubernetes configuration passed through to Trainer.
     """
     from pathlib import Path
 
@@ -128,12 +177,19 @@ def extract_speculator(
 
         return f"pvc://{persistent_pvc}/{relative_path.as_posix()}"
 
+    vllm_source = vllm_source.strip().lower()
+    if vllm_source not in {"managed", "remote"}:
+        raise ValueError("vllm_source must be either 'managed' or 'remote'")
+    vllm_endpoint = (vllm_endpoint or "").strip() or None
+    if vllm_source == "remote" and vllm_endpoint is None:
+        raise ValueError("vllm_endpoint is required when vllm_source='remote'")
+    if vllm_source == "managed" and vllm_endpoint is not None:
+        raise ValueError("vllm_endpoint must be omitted when vllm_source='managed'")
+
     if vllm_source == "remote":
         verifier_model = verifier_model_pvc or verifier_model
     elif verifier_model_pvc and not download_model:
         verifier_model = verifier_model_pvc
-    if not vllm_endpoint:
-        vllm_endpoint = None
     if dataset_download_enabled:
         if not downloaded_dataset_uri:
             raise ValueError("downloaded_dataset_uri is required when dataset download is enabled")

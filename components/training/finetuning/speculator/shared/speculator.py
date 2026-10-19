@@ -84,6 +84,20 @@ def _validate_external_pvc_paths(
         raise ValueError("External vLLM requires PVC-backed verifier_model_pvc and hidden_states_path values")
 
 
+def _validate_vllm_configuration(vllm_source: str | None, vllm_endpoint: str | None) -> str | None:
+    """Require a remote endpoint only for remote vLLM and normalize blank values."""
+    source = (vllm_source or "managed").strip().lower()
+    if source not in {"managed", "remote"}:
+        raise ValueError("vllm_source must be either 'managed' or 'remote'")
+
+    endpoint = (vllm_endpoint or "").strip() or None
+    if source == "remote" and endpoint is None:
+        raise ValueError("vllm_endpoint is required when vllm_source='remote'")
+    if source == "managed" and endpoint is not None:
+        raise ValueError("vllm_endpoint must be omitted when vllm_source='managed'")
+    return endpoint
+
+
 def run_speculator(mode: str, values: dict[str, Any]) -> str:
     """Run one fixed Speculator mode from a KFP launcher."""
     try:
@@ -134,6 +148,7 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
     }
     for key, default in defaults.items():
         values.setdefault(key, default)
+    values["vllm_endpoint"] = _validate_vllm_configuration(values.get("vllm_source"), values.get("vllm_endpoint"))
 
     from kubernetes import client as k8s
 
@@ -158,10 +173,6 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
     def local_path(uri: str) -> str:
         return _local_path(uri, persistent_pvc, persistent_mount_path, workspace_claim, pvc_path)
 
-    if values.get("vllm_endpoint") == "":
-        raise ValueError(
-            "vllm_endpoint must be omitted/None for managed vLLM or set to a non-empty URL for external vLLM"
-        )
     for key in (
         "dataset_name",
         "hidden_states_path",
