@@ -2,6 +2,8 @@
 
 import inspect
 
+import pytest
+
 from .. import speculator
 
 
@@ -41,7 +43,64 @@ class TestSpeculatorRuntime:
         assert "must be omitted/None for managed vLLM" in source
 
     def test_runtime_validates_raw_verifier_for_external_vllm(self):
-        """Verify external vLLM validation checks the original verifier input."""
+        """Verify external vLLM validates PVC-backed paths after URI normalization."""
         source = inspect.getsource(speculator.run_speculator)
         assert 'raw_verifier_model = values["verifier_model"]' in source
-        assert 'not raw_verifier_model.startswith("pvc://")' in source
+        assert "_validate_external_pvc_paths(" in source
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("models/Qwen3-0.6B", "pvc://shared/models/Qwen3-0.6B"),
+            ("pvc://shared/models/Qwen3-0.6B", "pvc://shared/models/Qwen3-0.6B"),
+        ],
+    )
+    def test_trainer_path_accepts_relative_and_pvc_uri_forms(self, value, expected):
+        """Bare and explicit PVC paths resolve to the same Trainer URI."""
+        assert speculator._trainer_path(value, "shared", "workspace") == expected
+
+    @pytest.mark.parametrize("value", ["speculator-output", "pvc://shared/speculator-output"])
+    def test_local_path_accepts_relative_and_pvc_uri_forms(self, tmp_path, value):
+        """Bare and explicit PVC output paths resolve to the same shared mount."""
+        persistent_mount = str(tmp_path / "persistent")
+        workspace_mount = str(tmp_path / "workspace")
+        assert speculator._local_path(value, "shared", persistent_mount, "workspace", workspace_mount) == str(
+            tmp_path / "persistent" / "speculator-output"
+        )
+
+    @pytest.mark.parametrize("value", ["../outside", "pvc://shared/../outside"])
+    def test_storage_paths_cannot_escape_mounted_pvc_roots(self, tmp_path, value):
+        """Bare paths and Trainer PVC URIs reject parent-directory traversal."""
+        with pytest.raises(ValueError, match="relative PVC path"):
+            speculator._trainer_path(value, "shared", "workspace")
+        with pytest.raises(ValueError, match="relative PVC path"):
+            speculator._local_path(value, "shared", str(tmp_path / "persistent"), "workspace", str(tmp_path))
+
+    @pytest.mark.parametrize(
+        ("raw_verifier", "verifier_model_pvc"),
+        [
+            ("models/verifier", "models/verifier"),
+            ("pvc://shared/models/verifier", "pvc://shared/models/verifier"),
+        ],
+    )
+    def test_external_vllm_accepts_bare_and_explicit_pvc_verifier_paths(self, raw_verifier, verifier_model_pvc):
+        """External vLLM accepts either path form after Trainer URI resolution."""
+        trainer_verifier = speculator._trainer_path(raw_verifier, "shared", "workspace")
+        trainer_hidden_states = speculator._trainer_path("speculator-output/hidden_states", "shared", "workspace")
+
+        speculator._validate_external_pvc_paths(
+            raw_verifier,
+            verifier_model_pvc,
+            trainer_verifier,
+            trainer_hidden_states,
+        )
+
+    def test_external_vllm_rejects_hugging_face_verifier_without_pvc_path(self):
+        """External vLLM still requires a verifier path accessible to the remote server."""
+        with pytest.raises(ValueError, match="PVC-backed"):
+            speculator._validate_external_pvc_paths(
+                "Qwen/Qwen2.5-1.5B-Instruct",
+                None,
+                "pvc://shared/Qwen/Qwen2.5-1.5B-Instruct",
+                "pvc://shared/speculator-output/hidden_states",
+            )

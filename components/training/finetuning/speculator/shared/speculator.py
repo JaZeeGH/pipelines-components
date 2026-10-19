@@ -1,7 +1,87 @@
 """Runtime shared by the mode-specific Speculator KFP components."""
 
 import os
+from pathlib import Path
 from typing import Any
+
+
+def _pvc_parts(uri: str) -> tuple[str | None, str]:
+    """Split a Trainer PVC URI into its claim and relative path."""
+    if uri.startswith("pvc://"):
+        claim, separator, path = uri.removeprefix("pvc://").partition("/")
+        if not claim or not separator:
+            raise ValueError("PVC paths must use pvc://<claim>/<path>")
+        return claim, path
+    return None, uri
+
+
+def _validate_relative_pvc_path(path: str, field_name: str) -> None:
+    """Reject PVC paths that are empty, absolute, or contain traversal segments."""
+    if not path or path.startswith("/") or any(part in {"", ".", ".."} for part in path.split("/")):
+        raise ValueError(f"{field_name} must be a non-empty relative PVC path without '.' or '..' segments")
+
+
+def _trainer_path(uri: str | None, persistent_pvc: str | None, workspace_claim: str | None) -> str | None:
+    """Convert a bare PVC-relative path to a Trainer URI; preserve explicit claims."""
+    if not uri:
+        return uri
+    if "://" in uri and not uri.startswith("pvc://"):
+        raise ValueError("Trainer storage paths must be relative paths or pvc:// URIs")
+    claim, path = _pvc_parts(uri)
+    _validate_relative_pvc_path(path, "Trainer storage path")
+    claim = claim or persistent_pvc or workspace_claim
+    if not claim:
+        raise RuntimeError("A PVC claim is required to resolve Trainer storage paths")
+    return f"pvc://{claim}/{path}"
+
+
+def _local_path(
+    uri: str | None,
+    persistent_pvc: str | None,
+    persistent_mount_path: str,
+    workspace_claim: str | None,
+    workspace_path: str,
+) -> str:
+    """Resolve a bare or claim-based PVC path to its mounted local path."""
+    if not uri:
+        return persistent_mount_path if persistent_pvc else workspace_path
+    if "://" in uri and not uri.startswith("pvc://"):
+        raise ValueError("Local storage paths must be relative paths or pvc:// URIs")
+
+    claim, path = _pvc_parts(uri)
+    claim = claim or persistent_pvc or workspace_claim
+    if persistent_pvc and claim == persistent_pvc:
+        root = persistent_mount_path
+    elif workspace_claim and claim == workspace_claim:
+        root = workspace_path
+    else:
+        raise ValueError(f"PVC {claim!r} is not mounted in this task")
+
+    _validate_relative_pvc_path(path, "PVC storage path")
+    root_path = Path(root).resolve()
+    resolved = (root_path / path).resolve()
+    try:
+        resolved.relative_to(root_path)
+    except ValueError as exc:
+        raise ValueError(f"PVC storage path must remain within its mounted root: {uri!r}") from exc
+    return str(resolved)
+
+
+def _validate_external_pvc_paths(
+    raw_verifier_model: str,
+    verifier_model_pvc: str | None,
+    trainer_verifier_model: str,
+    trainer_hidden_states_path: str | None,
+) -> None:
+    """Ensure external vLLM receives verifier and hidden states from PVC storage."""
+    verifier_is_pvc_backed = bool(verifier_model_pvc) or raw_verifier_model.startswith("pvc://")
+    if (
+        not verifier_is_pvc_backed
+        or not trainer_verifier_model.startswith("pvc://")
+        or not trainer_hidden_states_path
+        or not trainer_hidden_states_path.startswith("pvc://")
+    ):
+        raise ValueError("External vLLM requires PVC-backed verifier_model_pvc and hidden_states_path values")
 
 
 def run_speculator(mode: str, values: dict[str, Any]) -> str:
@@ -55,12 +135,6 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
     for key, default in defaults.items():
         values.setdefault(key, default)
 
-    def pvc_parts(uri: str) -> tuple[str | None, str]:
-        if uri.startswith("pvc://"):
-            claim, _, path = uri.removeprefix("pvc://").partition("/")
-            return claim, path
-        return None, uri.lstrip("/")
-
     from kubernetes import client as k8s
 
     k8s_config = values.get("kubernetes_config")
@@ -79,25 +153,10 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
         raise RuntimeError(f"KFP workspace volume {workspace_name!r} is not backed by a PVC")
 
     def trainer_path(uri: str | None) -> str | None:
-        if not uri:
-            return uri
-        claim, path = pvc_parts(uri)
-        return uri if claim else f"pvc://{persistent_pvc or workspace_claim}/{path}"
+        return _trainer_path(uri, persistent_pvc, workspace_claim)
 
     def local_path(uri: str) -> str:
-        if not uri:
-            return persistent_mount_path if persistent_pvc else pvc_path
-        claim, path = pvc_parts(uri)
-        if persistent_pvc and not claim:
-            return os.path.join(persistent_mount_path, path)
-        if persistent_pvc and claim == persistent_pvc:
-            return os.path.join(persistent_mount_path, path)
-        if claim and claim != workspace_claim:
-            raise ValueError(
-                f"PVC {claim!r} is not the KFP workspace PVC {workspace_claim!r}; "
-                "mount external PVCs explicitly before using them"
-            )
-        return os.path.join(pvc_path, path)
+        return _local_path(uri, persistent_pvc, persistent_mount_path, workspace_claim, pvc_path)
 
     if values.get("vllm_endpoint") == "":
         raise ValueError(
@@ -147,8 +206,12 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
     trainer_hidden_states_path = trainer_path(values.get("hidden_states_path"))
     trainer_training_data_path = trainer_path(values.get("training_data_path"))
     if external:
-        if not raw_verifier_model.startswith("pvc://") or not trainer_hidden_states_path:
-            raise ValueError("External vLLM requires a pvc:// verifier_model and hidden_states_path")
+        _validate_external_pvc_paths(
+            raw_verifier_model,
+            values.get("verifier_model_pvc"),
+            trainer_verifier_model,
+            trainer_hidden_states_path,
+        )
         if not values.get("target_layer_ids"):
             raise ValueError("target_layer_ids is required with an external vLLM endpoint")
 
@@ -312,7 +375,7 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
             # output/model storage uses that PVC.
             storage_claims = set()
             for storage_uri in (trainer_output_dir, trainer_hidden_states_path, trainer_training_data_path):
-                claim, _ = pvc_parts(storage_uri or "")
+                claim, _ = _pvc_parts(storage_uri or "")
                 if claim:
                     storage_claims.add(claim)
             duplicate_mount_pairs = {(claim, persistent_mount_path) for claim in storage_claims}

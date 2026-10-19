@@ -6,8 +6,13 @@
 
 Extract verifier hidden states using managed or external vLLM.
 
-``dataset_name`` selects the source dataset. When regeneration is enabled, responses are regenerated through the verifier before hidden-state extraction. Managed mode uses the in-job vLLM sidecar; providing ``vllm_endpoint`` uses an external vLLM service and requires matching shared model and
-hidden-state paths.
+``dataset_name`` selects the source dataset. When regeneration is enabled, responses are regenerated through the verifier before hidden-state extraction. Managed mode uses the in-job vLLM sidecar. When model downloading is disabled, the managed sidecar uses ``verifier_model_pvc`` if provided. Remote
+mode uses an external vLLM service and requires matching shared model and hidden-state paths. Relative and absolute JSON/JSONL paths under ``persistent_mount_path`` are resolved to a PVC URI before the Trainer job starts. Existing ``pvc://<claim>/<path>`` dataset references retain their Trainer URI
+semantics.
+
+``verifier_model_pvc``, ``output_dir``, and ``hidden_states_path`` accept paths relative to the configured PVC mount or explicit ``pvc://<claim>/<path>`` Trainer URIs. For example, with ``persistent_pvc="shared"``, ``verifier_model_pvc="models/verifier"`` and
+``verifier_model_pvc="pvc://shared/models/verifier"`` identify the same model; ``output_dir="speculator-output"`` and ``output_dir="pvc://shared/speculator-output"`` identify the same directory; ``hidden_states_path="speculator-output/hidden_states"`` and
+``hidden_states_path="pvc://shared/speculator-output/hidden_states"`` identify the same hidden-state path. Relative paths use ``persistent_pvc`` when supplied, otherwise the KFP workspace PVC.
 
 ## Inputs 📥
 
