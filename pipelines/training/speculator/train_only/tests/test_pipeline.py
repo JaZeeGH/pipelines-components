@@ -54,6 +54,8 @@ def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_p
     assert "speculator-training-pipeline" in compiled_pipeline
     pipeline_spec = next(yaml.safe_load_all(compiled_pipeline))
     tasks = pipeline_spec["root"]["dag"]["tasks"]
+    assert tasks["train-speculator-mode"]["taskInfo"]["name"] == "speculator-training-mode"
+    assert tasks["evaluate-speculator"]["taskInfo"]["name"] == "evaluate-draft-model"
     assert "model-registry==0.3.9" in compiled_pipeline
     assert "model-registry==0.3.4" not in compiled_pipeline
     assert "train-speculator-mode" in tasks["evaluate-speculator"]["dependentTasks"]

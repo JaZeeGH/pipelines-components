@@ -248,6 +248,7 @@ def speculator_training_pipeline(
         persistent_pvc=persistent_pvc,
         persistent_mount_path="/mnt/persistent",
     )
+    train_task.set_display_name("speculator-training-mode")
     kfp.kubernetes.mount_pvc(train_task, pvc_name=persistent_pvc, mount_path="/mnt/persistent")
     _attach_k8s(train_task)
 
@@ -265,6 +266,7 @@ def speculator_training_pipeline(
         evaluation_startup_timeout_seconds=evaluation_startup_timeout_seconds,
         evaluation_sample_seed=evaluation_sample_seed,
     )
+    evaluation_task.set_display_name("evaluate-draft-model")
     evaluation_task.after(train_task)
     kfp.kubernetes.mount_pvc(evaluation_task, pvc_name=persistent_pvc, mount_path="/mnt/persistent")
     evaluation_task.set_accelerator_type("nvidia.com/gpu")
