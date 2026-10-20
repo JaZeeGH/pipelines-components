@@ -9,9 +9,9 @@ Train, evaluate, register, and serve a draft from existing artifacts.
 This pipeline trains a draft from existing artifacts and expects the verifier model, hidden states, and the dataset from the data extraction pipeline to already exist on the shared PVC. It does not download the verifier. Relative storage paths are resolved against ``p01_persistent_pvc``. Explicit
 ``pvc://<claim>/<path>`` paths must reference that same PVC.
 
-For example, with ``p01_persistent_pvc="shared"``, ``p06_verifier_model_pvc="models/Qwen--Qwen3-0.6B"`` is equivalent to ``pvc://shared/models/Qwen--Qwen3-0.6B``. Likewise, ``p09_output_dir="speculator-output"`` and ``p08_hidden_states_path="speculator-output/hidden_states"`` can be written as
-``pvc://shared/speculator-output`` and ``pvc://shared/speculator-output/hidden_states``. The default ``p07_training_data_path`` and ``p09_output_dir`` are both ``speculator-output``, matching the data-only pipeline defaults. If you customize the data-only output directory, update
-``p07_training_data_path`` and ``p08_hidden_states_path`` too. The hidden-state default matches the data-only pipeline's default output directory; it is not discovered automatically from a previous pipeline run.
+For example, with ``p01_persistent_pvc="shared"``, ``p06_verifier_model_pvc="models/Qwen--Qwen3-0.6B"`` is equivalent to ``pvc://shared/models/Qwen--Qwen3-0.6B``. Likewise, ``p10_output_dir="speculator-output"`` and ``p09_hidden_states_path="speculator-output/hidden_states"`` can be written as
+``pvc://shared/speculator-output`` and ``pvc://shared/speculator-output/hidden_states``. The default ``p08_training_data_path`` and ``p10_output_dir`` are both ``speculator-output``, matching the data-only pipeline defaults. If you customize the data-only output directory, update
+``p08_training_data_path`` and ``p09_hidden_states_path`` too. The hidden-state default matches the data-only pipeline's default output directory; it is not discovered automatically from a previous pipeline run.
 
 The trained draft is copied to ``pvc://<p01_persistent_pvc>/final_model`` for evaluation, Model Registry, and serving. The resulting KServe endpoint uses cluster-local visibility.
 
@@ -28,11 +28,11 @@ Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model reg
 | `p03_model_registry_name` | `str` | `None` | Required model name, unique in the selected registry. |
 | `p04_serving_namespace` | `str` | `None` | Namespace where KServe creates the endpoint; it must match the PVC namespace and have required permissions. |
 | `p05_serving_endpoint_name` | `str` | `None` | Required DNS-compatible KServe InferenceService name. |
-| `p06_verifier_model_pvc` | `str` | `""` | Existing verifier directory on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
-| `p07_training_data_path` | `str` | `speculator-output` | Directory containing the preprocessed dataset from the data extraction pipeline. Default: ``speculator-output``. Use a relative path or matching URI. |
-| `p08_hidden_states_path` | `str` | `speculator-output/hidden_states` | Existing hidden-state directory from data-only extraction. Default: ``speculator-output/hidden_states``. Use a relative path or matching URI. |
-| `p09_output_dir` | `str` | `speculator-output` | Checkpoint and output directory on ``p01_persistent_pvc``. Default: ``speculator-output``. Use a relative path or matching URI. |
-| `p10_evaluation_dataset_uri` | `str` | `""` | Required Hugging Face dataset ID or local JSONL file on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
+| `p06_verifier_model_pvc` | `str` | `None` | Required existing verifier directory on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
+| `p07_evaluation_dataset_uri` | `str` | `None` | Required Hugging Face dataset ID or local JSONL file on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
+| `p08_training_data_path` | `str` | `speculator-output` | Directory containing the preprocessed dataset from the data extraction pipeline. Default: ``speculator-output``. Use a relative path or matching URI. |
+| `p09_hidden_states_path` | `str` | `speculator-output/hidden_states` | Existing hidden-state directory from data-only extraction. Default: ``speculator-output/hidden_states``. Use a relative path or matching URI. |
+| `p10_output_dir` | `str` | `speculator-output` | Checkpoint and output directory on ``p01_persistent_pvc``. Default: ``speculator-output``. Use a relative path or matching URI. |
 | `p11_total_seq_len` | `int` | `2048` | Positive sequence length for preprocessing and training; keep consistent with the data-only extraction run. |
 | `p12_speculator_type` | `str` | `eagle3` | Draft architecture. ``eagle3`` is currently supported. |
 | `p13_target_layer_ids` | `str` | `2,14,25,28` | Four comma-separated verifier layer IDs. Use the same IDs as data-only extraction; set matching IDs for another verifier. |

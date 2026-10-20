@@ -11,10 +11,10 @@ PUBLIC_INPUTS = [
     "p04_serving_namespace",
     "p05_serving_endpoint_name",
     "p06_verifier_model_pvc",
-    "p07_training_data_path",
-    "p08_hidden_states_path",
-    "p09_output_dir",
-    "p10_evaluation_dataset_uri",
+    "p07_evaluation_dataset_uri",
+    "p08_training_data_path",
+    "p09_hidden_states_path",
+    "p10_output_dir",
     "p11_total_seq_len",
     "p12_speculator_type",
     "p13_target_layer_ids",
@@ -69,9 +69,9 @@ def test_pipeline_exposes_training_registry_and_serving_inputs():
     assert inputs["p03_model_registry_name"].default is None
     assert inputs["p04_serving_namespace"].default is None
     assert inputs["p05_serving_endpoint_name"].default is None
-    assert inputs["p06_verifier_model_pvc"].default == ""
-    assert inputs["p07_training_data_path"].default == "speculator-output"
-    assert inputs["p10_evaluation_dataset_uri"].default == ""
+    assert inputs["p06_verifier_model_pvc"].default is None
+    assert inputs["p07_evaluation_dataset_uri"].default is None
+    assert inputs["p08_training_data_path"].default == "speculator-output"
     assert inputs["p34_job_envs"].default == "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1"
     assert inputs["p35_job_runtime"].default == "speculator-model-opt-cuda"
     assert "training_envs" not in inputs
@@ -96,26 +96,41 @@ def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_p
 
     compiled_pipeline = output_path.read_text()
     assert "speculator-training-pipeline" in compiled_pipeline
-    pipeline_spec = next(yaml.safe_load_all(compiled_pipeline))
+    pipeline_documents = list(yaml.safe_load_all(compiled_pipeline))
+    pipeline_spec = pipeline_documents[0]
+    platform_spec = pipeline_documents[1]
     pipeline_inputs = pipeline_spec["root"]["inputDefinitions"]["parameters"]
     assert list(pipeline_inputs) == PUBLIC_INPUTS
     tasks = pipeline_spec["root"]["dag"]["tasks"]
     assert tasks["train-speculator-mode"]["taskInfo"]["name"] == "speculator-training-mode"
     assert tasks["evaluate-speculator"]["taskInfo"]["name"] == "evaluate-draft-model"
+    assert tasks["evaluate-speculator"]["cachingOptions"].get("enableCache", False) is False
     assert "model-registry==0.3.9" in compiled_pipeline
     assert "model-registry==0.3.4" not in compiled_pipeline
     assert "train-speculator-mode" in tasks["evaluate-speculator"]["dependentTasks"]
     assert "evaluate-speculator" in tasks["kubeflow-model-registry"]["dependentTasks"]
     assert "kubeflow-model-registry" in tasks["speculative-decoding-serving"]["dependentTasks"]
 
+    evaluation_component_name = tasks["evaluate-speculator"]["componentRef"]["name"]
+    evaluation_executor_label = pipeline_spec["components"][evaluation_component_name]["executorLabel"]
+    evaluation_kubernetes_config = platform_spec["platforms"]["kubernetes"]["deploymentSpec"]["executors"][
+        evaluation_executor_label
+    ]
+    assert evaluation_kubernetes_config["imagePullPolicy"] == "IfNotPresent"
+    evaluation_secrets = evaluation_kubernetes_config["secretAsEnv"]
+    assert {secret["secretName"] for secret in evaluation_secrets} == {"hf-token"}
+    assert all(secret["optional"] is True for secret in evaluation_secrets)
+    assert {key_to_env["envVar"] for secret in evaluation_secrets for key_to_env in secret["keyToEnv"]} == {"HF_TOKEN"}
+
     train_inputs = tasks["train-speculator-mode"]["inputs"]["parameters"]
     assert train_inputs["persistent_pvc"]["componentInputParameter"] == "p01_persistent_pvc"
-    assert train_inputs["hidden_states_path"]["componentInputParameter"] == "p08_hidden_states_path"
-    assert train_inputs["training_data_path"]["componentInputParameter"] == "p07_training_data_path"
+    assert train_inputs["hidden_states_path"]["componentInputParameter"] == "p09_hidden_states_path"
+    assert train_inputs["training_data_path"]["componentInputParameter"] == "p08_training_data_path"
     assert train_inputs["training_ttt_steps"]["componentInputParameter"] == "p18_training_test_time_steps"
 
     evaluation_inputs = tasks["evaluate-speculator"]["inputs"]["parameters"]
     assert evaluation_inputs["evaluation_dataset_pvc"]["componentInputParameter"] == "p01_persistent_pvc"
+    assert evaluation_inputs["evaluation_dataset_uri"]["componentInputParameter"] == "p07_evaluation_dataset_uri"
     assert (
         evaluation_inputs["evaluation_num_speculative_tokens"]["componentInputParameter"]
         == "p41_num_speculative_tokens"

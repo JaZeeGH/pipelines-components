@@ -57,11 +57,11 @@ def speculator_training_pipeline(
     p03_model_registry_name: str,
     p04_serving_namespace: str,
     p05_serving_endpoint_name: str,
-    p06_verifier_model_pvc: str = "",
-    p07_training_data_path: str = "speculator-output",
-    p08_hidden_states_path: str = "speculator-output/hidden_states",
-    p09_output_dir: str = "speculator-output",
-    p10_evaluation_dataset_uri: str = "",
+    p06_verifier_model_pvc: str,
+    p07_evaluation_dataset_uri: str,
+    p08_training_data_path: str = "speculator-output",
+    p09_hidden_states_path: str = "speculator-output/hidden_states",
+    p10_output_dir: str = "speculator-output",
     p11_total_seq_len: int = 2048,
     p12_speculator_type: str = "eagle3",
     p13_target_layer_ids: str = "2,14,25,28",
@@ -112,13 +112,13 @@ def speculator_training_pipeline(
     For example, with ``p01_persistent_pvc="shared"``,
     ``p06_verifier_model_pvc="models/Qwen--Qwen3-0.6B"`` is equivalent to
     ``pvc://shared/models/Qwen--Qwen3-0.6B``. Likewise,
-    ``p09_output_dir="speculator-output"`` and
-    ``p08_hidden_states_path="speculator-output/hidden_states"`` can be written as
+    ``p10_output_dir="speculator-output"`` and
+    ``p09_hidden_states_path="speculator-output/hidden_states"`` can be written as
     ``pvc://shared/speculator-output`` and
     ``pvc://shared/speculator-output/hidden_states``. The default
-    ``p07_training_data_path`` and ``p09_output_dir`` are both ``speculator-output``,
+    ``p08_training_data_path`` and ``p10_output_dir`` are both ``speculator-output``,
     matching the data-only pipeline defaults. If you customize the data-only
-    output directory, update ``p07_training_data_path`` and ``p08_hidden_states_path`` too.
+    output directory, update ``p08_training_data_path`` and ``p09_hidden_states_path`` too.
     The hidden-state default matches the data-only pipeline's default output
     directory; it is not discovered automatically from a previous pipeline run.
 
@@ -149,17 +149,17 @@ def speculator_training_pipeline(
         p04_serving_namespace: Namespace where KServe creates the endpoint; it must match
             the PVC namespace and have required permissions.
         p05_serving_endpoint_name: Required DNS-compatible KServe InferenceService name.
-        p06_verifier_model_pvc: Existing verifier directory on ``p01_persistent_pvc``.
+        p06_verifier_model_pvc: Required existing verifier directory on ``p01_persistent_pvc``.
             Use a relative path or matching ``pvc://`` URI.
-        p07_training_data_path: Directory containing the preprocessed dataset from the
+        p07_evaluation_dataset_uri: Required Hugging Face dataset ID or local JSONL file
+            on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI.
+        p08_training_data_path: Directory containing the preprocessed dataset from the
             data extraction pipeline. Default: ``speculator-output``. Use a relative path
             or matching URI.
-        p08_hidden_states_path: Existing hidden-state directory from data-only extraction.
+        p09_hidden_states_path: Existing hidden-state directory from data-only extraction.
             Default: ``speculator-output/hidden_states``. Use a relative path or matching URI.
-        p09_output_dir: Checkpoint and output directory on ``p01_persistent_pvc``.
+        p10_output_dir: Checkpoint and output directory on ``p01_persistent_pvc``.
             Default: ``speculator-output``. Use a relative path or matching URI.
-        p10_evaluation_dataset_uri: Required Hugging Face dataset ID or local JSONL file
-            on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI.
         p11_total_seq_len: Positive sequence length for preprocessing and training; keep
             consistent with the data-only extraction run.
         p12_speculator_type: Draft architecture. ``eagle3`` is currently supported.
@@ -210,10 +210,10 @@ def speculator_training_pipeline(
     serving_namespace = p04_serving_namespace
     serving_endpoint_name = p05_serving_endpoint_name
     verifier_model_pvc = p06_verifier_model_pvc
-    training_data_path = p07_training_data_path
-    hidden_states_path = p08_hidden_states_path
-    output_dir = p09_output_dir
-    evaluation_dataset_uri = p10_evaluation_dataset_uri
+    evaluation_dataset_uri = p07_evaluation_dataset_uri
+    training_data_path = p08_training_data_path
+    hidden_states_path = p09_hidden_states_path
+    output_dir = p10_output_dir
     total_seq_len = p11_total_seq_len
     speculator_type = p12_speculator_type
     target_layer_ids = p13_target_layer_ids
@@ -251,7 +251,6 @@ def speculator_training_pipeline(
     model_registry_port = p45_model_registry_port
     model_registry_version = p46_model_registry_version
     serving_runtime_image = p47_serving_runtime_image
-
     train_task = train_speculator_mode(
         verifier_model=verifier_model_pvc,
         verifier_model_pvc=verifier_model_pvc,
@@ -311,7 +310,14 @@ def speculator_training_pipeline(
     evaluation_task.after(train_task)
     kfp.kubernetes.mount_pvc(evaluation_task, pvc_name=persistent_pvc, mount_path="/mnt/persistent")
     evaluation_task.set_accelerator_type("nvidia.com/gpu")
-    _attach_k8s(evaluation_task)
+    evaluation_task.set_caching_options(False)
+    kfp.kubernetes.set_image_pull_policy(evaluation_task, "IfNotPresent")
+    kfp.kubernetes.use_secret_as_env(
+        evaluation_task,
+        secret_name="hf-token",
+        secret_key_to_env={"HF_TOKEN": "HF_TOKEN"},
+        optional=True,
+    )
 
     model_registry_task = kubeflow_model_registry(
         pvc_mount_path="/mnt/persistent",
