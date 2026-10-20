@@ -6,8 +6,8 @@
 
 Serve a verifier and Eagle3 draft model through one vLLM endpoint.
 
-The verifier and draft directories must already exist on ``model_cache_pvc``. KServe mounts the PVC root at ``/mnt/models``. The draft directory should contain the speculator checkpoint's ``config.json`` and weights. vLLM receives an Eagle3 ``--speculative-config`` that points to the draft path
-under that root; the verifier is the primary ``--model``.
+The verifier and draft directories must already exist on ``model_cache_pvc``. Pass either a path relative to the PVC root or a ``pvc://<model_cache_pvc>/<path>`` URI. KServe mounts the PVC root at ``/mnt/models``. The draft directory should contain the speculator checkpoint's ``config.json`` and
+weights. vLLM receives an Eagle3 ``--speculative-config`` that points to the draft path under that root; the verifier is the primary ``--model``.
 
 The component waits for the requested predictor configuration to finish rolling out and for KServe readiness. Updates release an old replica before allocating replacement GPU resources, so single-replica updates have downtime. Rollout and endpoint publication share a 30-minute timeout. Reusing a
 stopped InferenceService clears its stop annotation to resume serving.
@@ -19,9 +19,9 @@ stopped InferenceService clears its stop annotation to resume serving.
 | `namespace` | `str` | `None` | Namespace in which to create the KServe resources. |
 | `endpoint_name` | `str` | `None` | DNS-compatible InferenceService name. |
 | `model_cache_pvc` | `str` | `None` | PVC containing both model directories. |
-| `verifier_model_dir` | `str` | `None` | Relative PVC directory containing the verifier model. |
-| `draft_model_dir` | `str` | `None` | Relative PVC directory containing the draft checkpoint. |
-| `runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:e310f71b5f9424783982e81d8dc4cba657c3e98f17f8512b827d9fa499ac82a3` | vLLM CUDA image supporting Eagle3 speculative decoding. |
+| `verifier_model_dir` | `str` | `None` | Verifier directory relative to the PVC root or a matching ``pvc://`` URI. |
+| `draft_model_dir` | `str` | `None` | Draft directory relative to the PVC root or a matching ``pvc://`` URI. |
+| `runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a` | vLLM CUDA image supporting Eagle3 speculative decoding. |
 | `hardware_profile_name` | `str` | `gpu-profile` | Existing RHOAI HardwareProfile name in ``redhat-ods-applications``, or empty to skip lookup and remove an old profile reference. A missing requested profile is an error. |
 | `min_replicas` | `int` | `1` | Minimum number of predictor replicas. |
 | `max_replicas` | `int` | `1` | Maximum number of predictor replicas. |
@@ -63,7 +63,7 @@ stopped InferenceService clears its stop annotation to resume serving.
   - speculative_decoding
   - vllm
   - kserve
-- **Last Verified**: 2026-10-16 12:32:07+00:00
+- **Last Verified**: 2026-10-20 00:00:00+00:00
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:

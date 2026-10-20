@@ -10,7 +10,7 @@ from kfp import dsl
 _COMPONENT_BASE_IMAGE = "registry.access.redhat.com/ubi9/python-311:latest"
 _DEFAULT_RUNTIME_IMAGE = (
     "registry.redhat.io/rhaii-fast/vllm-cuda-rhel9"
-    "@sha256:e310f71b5f9424783982e81d8dc4cba657c3e98f17f8512b827d9fa499ac82a3"
+    "@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a"
 )
 
 
@@ -26,7 +26,7 @@ def speculative_decoding_serving(
     draft_model_dir: str,
     runtime_image: str = (
         "registry.redhat.io/rhaii-fast/vllm-cuda-rhel9"
-        "@sha256:e310f71b5f9424783982e81d8dc4cba657c3e98f17f8512b827d9fa499ac82a3"
+        "@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a"
     ),
     hardware_profile_name: str = "gpu-profile",
     min_replicas: int = 1,
@@ -48,7 +48,8 @@ def speculative_decoding_serving(
     """Serve a verifier and Eagle3 draft model through one vLLM endpoint.
 
     The verifier and draft directories must already exist on ``model_cache_pvc``.
-    KServe mounts the PVC root at ``/mnt/models``. The draft directory should
+    Pass either a path relative to the PVC root or a ``pvc://<model_cache_pvc>/<path>``
+    URI. KServe mounts the PVC root at ``/mnt/models``. The draft directory should
     contain the speculator checkpoint's ``config.json`` and weights. vLLM receives
     an Eagle3 ``--speculative-config`` that points to the draft path under that
     root; the verifier is the primary ``--model``.
@@ -63,8 +64,8 @@ def speculative_decoding_serving(
         namespace: Namespace in which to create the KServe resources.
         endpoint_name: DNS-compatible InferenceService name.
         model_cache_pvc: PVC containing both model directories.
-        verifier_model_dir: Relative PVC directory containing the verifier model.
-        draft_model_dir: Relative PVC directory containing the draft checkpoint.
+        verifier_model_dir: Verifier directory relative to the PVC root or a matching ``pvc://`` URI.
+        draft_model_dir: Draft directory relative to the PVC root or a matching ``pvc://`` URI.
         runtime_image: vLLM CUDA image supporting Eagle3 speculative decoding.
         hardware_profile_name: Existing RHOAI HardwareProfile name in
             ``redhat-ods-applications``, or empty to skip lookup and remove an old
@@ -113,6 +114,13 @@ def speculative_decoding_serving(
 
     def normalize_model_dir(value: str, field_name: str) -> str:
         value = value.strip()
+        if value.startswith("pvc://"):
+            claim, separator, path = value.removeprefix("pvc://").partition("/")
+            if claim != model_cache_pvc or not separator:
+                raise ValueError(f"{field_name} PVC URI must reference model_cache_pvc {model_cache_pvc!r}")
+            value = path
+        elif "://" in value:
+            raise ValueError(f"{field_name} must be a relative PVC directory or pvc:// URI: {value!r}")
         if value.startswith("/"):
             raise ValueError(f"{field_name} must be a non-empty relative PVC directory: {value!r}")
         value = value.strip("/")

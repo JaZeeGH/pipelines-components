@@ -205,6 +205,28 @@ def test_creates_resources_with_speculative_config_and_shared_pvc():
     ]
 
 
+def test_pvc_uris_are_normalized_for_model_directories():
+    """PVC URIs for both models resolve under the mounted claim root."""
+    api = _create_api()
+    _run_component(
+        api,
+        verifier_model_dir="pvc://model-cache/models/qwen3-0.6b",
+        draft_model_dir="pvc://model-cache/speculator/run-01/checkpoint_best",
+    )
+
+    container = _resource_body(api, "servingruntimes")["spec"]["containers"][0]
+    args = container["args"]
+    speculative_config = json.loads(args[args.index("--speculative-config") + 1])
+    assert "--model=/mnt/models/models/qwen3-0.6b" in args
+    assert speculative_config["model"] == "/mnt/models/speculator/run-01/checkpoint_best"
+
+
+def test_model_directory_pvc_uri_must_match_mounted_claim():
+    """Model directory URIs cannot reference a different PVC claim."""
+    with pytest.raises(ValueError, match="must reference model_cache_pvc"):
+        _run_component(mock.MagicMock(), verifier_model_dir="pvc://other-cache/models/qwen3-0.6b")
+
+
 def test_updates_allow_gpu_reuse():
     """Updates release one old replica before allocating replacement GPU resources."""
     api = _create_api()
