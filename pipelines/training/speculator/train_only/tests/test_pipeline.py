@@ -3,12 +3,12 @@
 import yaml
 from kfp import compiler
 
-from ..pipeline import speculator_train_only_pipeline
+from ..pipeline import speculator_training_pipeline
 
 
 def test_pipeline_exposes_training_registry_and_serving_inputs():
     """The pipeline exposes its PVC, training, Registry, and serving controls."""
-    inputs = speculator_train_only_pipeline.component_spec.inputs
+    inputs = speculator_training_pipeline.component_spec.inputs
     expected = {
         "persistent_pvc",
         "hidden_states_path",
@@ -25,17 +25,32 @@ def test_pipeline_exposes_training_registry_and_serving_inputs():
     assert "download_model" not in inputs
     assert inputs["target_layer_ids"].default == "2,14,25,28"
     assert inputs["training_data_path"].default == "speculator-output"
+    assert inputs["evaluation_dataset_uri"].default == ""
     assert inputs["model_registry_name"].default is None
     assert inputs["serving_endpoint_name"].default is None
-    assert inputs["verifier_model_pvc"].default == "models/Qwen--Qwen3-0.6B"
+    assert inputs["verifier_model_pvc"].default == ""
+    assert inputs["job_envs"].default == "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1"
+    assert inputs["job_runtime"].default == "speculator-model-opt-cuda"
+    assert "training_envs" not in inputs
+    assert "training_runtime" not in inputs
+
+
+def test_progression_metrics_are_not_public_controls():
+    """Progress tracking uses the training component's always-on defaults."""
+    inputs = speculator_training_pipeline.component_spec.inputs
+
+    assert "enable_progression_tracking" not in inputs
+    assert "metrics_port" not in inputs
+    assert "metrics_poll_interval_seconds" not in inputs
 
 
 def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_path):
     """Evaluation follows training, registration follows evaluation, then serving."""
-    output_path = tmp_path / "speculator_train_only.yaml"
-    compiler.Compiler().compile(speculator_train_only_pipeline, package_path=str(output_path))
+    output_path = tmp_path / "speculator_training.yaml"
+    compiler.Compiler().compile(speculator_training_pipeline, package_path=str(output_path))
 
     compiled_pipeline = output_path.read_text()
+    assert "speculator-training-pipeline" in compiled_pipeline
     pipeline_spec = next(yaml.safe_load_all(compiled_pipeline))
     tasks = pipeline_spec["root"]["dag"]["tasks"]
     assert "model-registry==0.3.9" in compiled_pipeline

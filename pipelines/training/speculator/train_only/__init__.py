@@ -1,1 +1,1 @@
-"""Speculator train-only pipeline."""
+"""Speculator training pipeline."""

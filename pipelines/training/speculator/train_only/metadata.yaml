@@ -1,5 +1,5 @@
 ---
-name: speculator_train_only_pipeline
+name: speculator_training_pipeline
 description: >-
   Train a Speculator Eagle3 draft from pre-extracted hidden states, benchmark it,
   register it, and serve it with vLLM.

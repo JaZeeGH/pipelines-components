@@ -1,4 +1,4 @@
-# Speculator Train Only Pipeline ✨
+# Speculator Training Pipeline ✨
 
 > ⚠️ **Stability: alpha** — This asset is not yet stable and may change.
 
@@ -31,8 +31,8 @@ Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model reg
 | `model_registry_port` | `int` | `8080` | HTTP REST service port copied from the registry endpoint; ``8080`` is the default. |
 | `model_registry_version` | `str` | `1.0.0` | Version label for this registration. Use a new version for each trained revision. |
 | `serving_runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a` | Eagle3-compatible vLLM image pull spec. The default is the pinned Red Hat runtime; override only with a verified digest. |
-| `evaluation_dataset_uri` | `str` | `RedHatAI/speculator_benchmarks` | Hugging Face dataset ID. The supported default, ``RedHatAI/speculator_benchmarks``, runs its ``HumanEval`` subset. For local data, provide an existing JSONL file on ``persistent_pvc`` as a relative path or matching ``pvc://`` URI. |
-| `verifier_model_pvc` | `str` | `models/Qwen--Qwen3-0.6B` | Required existing verifier directory on ``persistent_pvc``; the default is ``models/Qwen--Qwen3-0.6B``. Use a relative path or ``pvc://<persistent_pvc>/<path>``. Training, evaluation, and serving all read this directory. |
+| `evaluation_dataset_uri` | `str` | `""` | Required Hugging Face dataset ID or local JSONL file on ``persistent_pvc``. For local data, use a relative path or matching ``pvc://`` URI; no dataset is assumed by default. |
+| `verifier_model_pvc` | `str` | `""` | Required existing verifier directory on ``persistent_pvc``. No model path is assumed by default. Use a relative path or ``pvc://<persistent_pvc>/<path>``. Training, evaluation, and serving all read this directory. |
 | `output_dir` | `str` | `speculator-output` | Trainer checkpoint/output directory on ``persistent_pvc``. Default: ``speculator-output``. Use a relative path or matching URI. |
 | `hidden_states_path` | `str` | `speculator-output/hidden_states` | Existing hidden-state directory from data-only extraction. The default ``speculator-output/hidden_states`` matches the data-only default ``output_dir="speculator-output"``; it is not auto-detected. Override it if the data-only run used a different output directory. Use a relative path or matching ``pvc://`` URI. |
 | `training_data_path` | `str` | `speculator-output` | Preprocessed Arrow dataset directory from data-only extraction. Default: ``speculator-output``. Set it to the data-only output path (relative or matching ``pvc://`` URI); an empty value falls back to ``output_dir``. |
@@ -59,13 +59,10 @@ Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model reg
 | `training_resource_cpu` | `str` | `4` | CPU request for the TrainJob worker, as a Kubernetes quantity. |
 | `training_resource_gpu` | `int` | `1` | Number of GPUs requested for the TrainJob worker. |
 | `training_resource_memory` | `str` | `64Gi` | Memory request for the TrainJob worker, as a Kubernetes quantity. |
-| `enable_progression_tracking` | `bool` | `True` | Enable Trainer progress reporting. |
-| `metrics_port` | `int` | `28080` | HTTP port for training metrics; valid range is ``1024``-``65535``. |
-| `metrics_poll_interval_seconds` | `int` | `30` | Seconds between metrics polls; valid range is ``5``-``300``. |
 | `packages_to_install` | `str` | `""` | Comma-separated Python packages to install in the TrainJob. |
 | `pip_index_urls` | `str` | `""` | Comma-separated package-index URLs for TrainJob installs. |
-| `training_envs` | `str` | `NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1` | Comma-separated ``KEY=VALUE`` environment overrides for the TrainJob. |
-| `training_runtime` | `str` | `speculator-model-opt-cuda` | Name of the ClusterTrainingRuntime used by the TrainJob. |
+| `job_envs` | `str` | `NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1` | Comma-separated ``KEY=VALUE`` environment overrides for the job. |
+| `job_runtime` | `str` | `speculator-model-opt-cuda` | Name of the runtime used by the job. |
 | `evaluation_max_samples` | `int` | `80` | Maximum requests per evaluation sweep point; must be positive. |
 | `evaluation_max_tokens` | `int` | `256` | Maximum generated tokens per evaluation request; must be positive. |
 | `evaluation_temperature` | `float` | `0.0` | Sampling temperature used by GuideLLM; ``0`` is deterministic. |
@@ -76,7 +73,7 @@ Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model reg
 
 ## Metadata 🗂️
 
-- **Name**: speculator_train_only_pipeline
+- **Name**: speculator_training_pipeline
 - **Description**: Train a Speculator Eagle3 draft from pre-extracted hidden states, benchmark it, register it, and serve it with vLLM.
 - **Stability**: alpha
 - **Dependencies**:

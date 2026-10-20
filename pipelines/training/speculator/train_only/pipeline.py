@@ -12,7 +12,7 @@ from components.training.finetuning.speculator import train_speculator_mode
 PVC_SIZE = "200Gi"
 PVC_STORAGE_CLASS = "nfs-csi"
 PVC_ACCESS_MODES = ["ReadWriteMany"]
-PIPELINE_NAME = "speculator-train-only-pipeline"
+PIPELINE_NAME = "speculator-training-pipeline"
 
 
 def _attach_k8s(task) -> None:
@@ -51,7 +51,7 @@ def _attach_k8s(task) -> None:
         ),
     ),
 )
-def speculator_train_only_pipeline(
+def speculator_training_pipeline(
     persistent_pvc: str,
     serving_namespace: str,
     model_registry_address: str,
@@ -60,8 +60,8 @@ def speculator_train_only_pipeline(
     model_registry_port: int = 8080,
     model_registry_version: str = "1.0.0",
     serving_runtime_image: str = "registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a",  # noqa: E501
-    evaluation_dataset_uri: str = "RedHatAI/speculator_benchmarks",
-    verifier_model_pvc: str = "models/Qwen--Qwen3-0.6B",
+    evaluation_dataset_uri: str = "",
+    verifier_model_pvc: str = "",
     output_dir: str = "speculator-output",
     hidden_states_path: str = "speculator-output/hidden_states",
     training_data_path: str = "speculator-output",
@@ -88,13 +88,10 @@ def speculator_train_only_pipeline(
     training_resource_cpu: str = "4",
     training_resource_gpu: int = 1,
     training_resource_memory: str = "64Gi",
-    enable_progression_tracking: bool = True,
-    metrics_port: int = 28080,
-    metrics_poll_interval_seconds: int = 30,
     packages_to_install: str = "",
     pip_index_urls: str = "",
-    training_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
-    training_runtime: str = "speculator-model-opt-cuda",
+    job_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
+    job_runtime: str = "speculator-model-opt-cuda",
     evaluation_max_samples: int = 80,
     evaluation_max_tokens: int = 256,
     evaluation_temperature: float = 0.0,
@@ -155,15 +152,14 @@ def speculator_train_only_pipeline(
         model_registry_version: Version label for this registration. Use a new version for each trained revision.
         serving_runtime_image: Eagle3-compatible vLLM image pull spec. The default is
             the pinned Red Hat runtime; override only with a verified digest.
-        evaluation_dataset_uri: Hugging Face dataset ID. The supported default,
-            ``RedHatAI/speculator_benchmarks``, runs its ``HumanEval`` subset. For
-            local data, provide an existing JSONL file on ``persistent_pvc`` as a
-            relative path or matching ``pvc://`` URI.
+        evaluation_dataset_uri: Required Hugging Face dataset ID or local JSONL file
+            on ``persistent_pvc``. For local data, use a relative path or matching
+            ``pvc://`` URI; no dataset is assumed by default.
         serving_endpoint_name: Required DNS-compatible KServe InferenceService name, unique in ``serving_namespace``.
         verifier_model_pvc: Required existing verifier directory on
-            ``persistent_pvc``; the default is ``models/Qwen--Qwen3-0.6B``. Use a
-            relative path or ``pvc://<persistent_pvc>/<path>``. Training, evaluation,
-            and serving all read this directory.
+            ``persistent_pvc``. No model path is assumed by default. Use a relative
+            path or ``pvc://<persistent_pvc>/<path>``. Training, evaluation, and
+            serving all read this directory.
         output_dir: Trainer checkpoint/output directory on ``persistent_pvc``.
             Default: ``speculator-output``. Use a relative path or matching URI.
         hidden_states_path: Existing hidden-state directory from data-only extraction.
@@ -203,13 +199,10 @@ def speculator_train_only_pipeline(
         training_resource_cpu: CPU request for the TrainJob worker, as a Kubernetes quantity.
         training_resource_gpu: Number of GPUs requested for the TrainJob worker.
         training_resource_memory: Memory request for the TrainJob worker, as a Kubernetes quantity.
-        enable_progression_tracking: Enable Trainer progress reporting.
-        metrics_port: HTTP port for training metrics; valid range is ``1024``-``65535``.
-        metrics_poll_interval_seconds: Seconds between metrics polls; valid range is ``5``-``300``.
         packages_to_install: Comma-separated Python packages to install in the TrainJob.
         pip_index_urls: Comma-separated package-index URLs for TrainJob installs.
-        training_envs: Comma-separated ``KEY=VALUE`` environment overrides for the TrainJob.
-        training_runtime: Name of the ClusterTrainingRuntime used by the TrainJob.
+        job_envs: Comma-separated ``KEY=VALUE`` environment overrides for the job.
+        job_runtime: Name of the runtime used by the job.
         evaluation_max_samples: Maximum requests per evaluation sweep point; must be positive.
         evaluation_max_tokens: Maximum generated tokens per evaluation request; must be positive.
         evaluation_temperature: Sampling temperature used by GuideLLM; ``0`` is deterministic.
@@ -248,13 +241,10 @@ def speculator_train_only_pipeline(
         training_resource_cpu=training_resource_cpu,
         training_resource_gpu=training_resource_gpu,
         training_resource_memory=training_resource_memory,
-        enable_progression_tracking=enable_progression_tracking,
-        metrics_port=metrics_port,
-        metrics_poll_interval_seconds=metrics_poll_interval_seconds,
         packages_to_install=packages_to_install,
         pip_index_urls=pip_index_urls,
-        training_envs=training_envs,
-        training_runtime=training_runtime,
+        training_envs=job_envs,
+        training_runtime=job_runtime,
         persistent_pvc=persistent_pvc,
         persistent_mount_path="/mnt/persistent",
     )
@@ -325,6 +315,6 @@ def speculator_train_only_pipeline(
 
 if __name__ == "__main__":
     kfp.compiler.Compiler().compile(
-        pipeline_func=speculator_train_only_pipeline,
+        pipeline_func=speculator_training_pipeline,
         package_path=__file__.replace(".py", ".yaml"),
     )
