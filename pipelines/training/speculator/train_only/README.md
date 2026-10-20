@@ -6,70 +6,70 @@
 
 Train, evaluate, register, and serve a draft from existing artifacts.
 
-This pipeline runs Trainer's train-only mode and expects the verifier model, hidden states, and preprocessed Arrow data to already exist on the shared PVC. It does not download the verifier. Relative storage paths are resolved against ``persistent_pvc``. Explicit ``pvc://<claim>/<path>`` paths must
-reference that same PVC.
+This pipeline trains a draft from existing artifacts and expects the verifier model, hidden states, and the dataset from the data extraction pipeline to already exist on the shared PVC. It does not download the verifier. Relative storage paths are resolved against ``p01_persistent_pvc``. Explicit
+``pvc://<claim>/<path>`` paths must reference that same PVC.
 
-For example, with ``persistent_pvc="shared"``, ``verifier_model_pvc="models/Qwen--Qwen3-0.6B"`` is equivalent to ``pvc://shared/models/Qwen--Qwen3-0.6B``. Likewise, ``output_dir="speculator-output"`` and ``hidden_states_path="speculator-output/hidden_states"`` can be written as
-``pvc://shared/speculator-output`` and ``pvc://shared/speculator-output/hidden_states``. The default ``training_data_path`` and ``output_dir`` are both ``speculator-output``, matching the data-only pipeline defaults. If you customize the data-only output directory, update ``training_data_path`` and
-``hidden_states_path`` too. The hidden-state default matches the data-only pipeline's default output directory; it is not discovered automatically from a previous pipeline run.
+For example, with ``p01_persistent_pvc="shared"``, ``p06_verifier_model_pvc="models/Qwen--Qwen3-0.6B"`` is equivalent to ``pvc://shared/models/Qwen--Qwen3-0.6B``. Likewise, ``p09_output_dir="speculator-output"`` and ``p08_hidden_states_path="speculator-output/hidden_states"`` can be written as
+``pvc://shared/speculator-output`` and ``pvc://shared/speculator-output/hidden_states``. The default ``p07_training_data_path`` and ``p09_output_dir`` are both ``speculator-output``, matching the data-only pipeline defaults. If you customize the data-only output directory, update
+``p07_training_data_path`` and ``p08_hidden_states_path`` too. The hidden-state default matches the data-only pipeline's default output directory; it is not discovered automatically from a previous pipeline run.
 
-The trained draft is copied to ``pvc://<persistent_pvc>/final_model`` for evaluation, Model Registry, and serving. The resulting KServe endpoint uses cluster-local visibility.
+The trained draft is copied to ``pvc://<p01_persistent_pvc>/final_model`` for evaluation, Model Registry, and serving. The resulting KServe endpoint uses cluster-local visibility.
 
-Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model registries** and create or select a registry. Copy its HTTP REST service URL. This pipeline takes the host and port separately: put only the hostname in ``model_registry_address`` and the service port in
-``model_registry_port``. For a URL such as ``http://registry-service.registry-namespace.svc:8080/api/model_registry/v1alpha3``, use ``registry-service.registry-namespace.svc`` and ``8080``; omit the scheme and API path. The pipeline ServiceAccount must have a RoleBinding to
-``registry-user-<registry-name>`` in the registry namespace. ``model_registry_address`` is required because this pipeline registers the evaluated model before serving it. Use a new ``model_registry_version`` for each trained revision.
+Model Registry setup: In the RHOAI dashboard, open **AI Hub > Models > Model registries** and create or select a registry. Copy its HTTP REST service URL. This pipeline takes the host and port separately: put only the hostname in ``p02_model_registry_address`` and the service port in
+``p45_model_registry_port``. For a URL such as ``http://registry-service.registry-namespace.svc:8080/api/model_registry/v1alpha3``, use ``registry-service.registry-namespace.svc`` and ``8080``; omit the scheme and API path. The pipeline ServiceAccount must have a RoleBinding to
+``registry-user-<registry-name>`` in the registry namespace. ``p02_model_registry_address`` is required because this pipeline registers the evaluated model before serving it. Use a new ``p46_model_registry_version`` for each trained revision.
 
 ## Inputs 📥
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
-| `persistent_pvc` | `str` | `None` | Name only of an existing ReadWriteMany PVC mounted at ``/mnt/persistent``; do not include a path or ``pvc://`` prefix. It stores the verifier, hidden states, preprocessed data, and model output. |
-| `serving_namespace` | `str` | `None` | OpenShift namespace where KServe creates the endpoint. It must be the PVC's namespace and have the required KServe permissions. |
-| `model_registry_address` | `str` | `None` | Required HTTP REST host from AI Hub > Models > Model registries. Enter only the hostname, without scheme or API path. |
-| `model_registry_name` | `str` | `None` | Required model name; choose a name unique within the selected registry. |
-| `serving_endpoint_name` | `str` | `None` | Required DNS-compatible KServe InferenceService name, unique in ``serving_namespace``. |
-| `model_registry_port` | `int` | `8080` | HTTP REST service port copied from the registry endpoint; ``8080`` is the default. |
-| `model_registry_version` | `str` | `1.0.0` | Version label for this registration. Use a new version for each trained revision. |
-| `serving_runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a` | Eagle3-compatible vLLM image pull spec. The default is the pinned Red Hat runtime; override only with a verified digest. |
-| `evaluation_dataset_uri` | `str` | `""` | Required Hugging Face dataset ID or local JSONL file on ``persistent_pvc``. For local data, use a relative path or matching ``pvc://`` URI; no dataset is assumed by default. |
-| `verifier_model_pvc` | `str` | `""` | Required existing verifier directory on ``persistent_pvc``. No model path is assumed by default. Use a relative path or ``pvc://<persistent_pvc>/<path>``. Training, evaluation, and serving all read this directory. |
-| `output_dir` | `str` | `speculator-output` | Trainer checkpoint/output directory on ``persistent_pvc``. Default: ``speculator-output``. Use a relative path or matching URI. |
-| `hidden_states_path` | `str` | `speculator-output/hidden_states` | Existing hidden-state directory from data-only extraction. The default ``speculator-output/hidden_states`` matches the data-only default ``output_dir="speculator-output"``; it is not auto-detected. Override it if the data-only run used a different output directory. Use a relative path or matching ``pvc://`` URI. |
-| `training_data_path` | `str` | `speculator-output` | Preprocessed Arrow dataset directory from data-only extraction. Default: ``speculator-output``. Set it to the data-only output path (relative or matching ``pvc://`` URI); an empty value falls back to ``output_dir``. |
-| `total_seq_len` | `int` | `2048` | Positive sequence length for preprocessing and training; keep it consistent with the data-only extraction run. |
-| `speculator_type` | `str` | `eagle3` | Draft architecture. ``eagle3`` is currently the supported training type. |
-| `target_layer_ids` | `str` | `2,14,25,28` | Exactly four comma-separated verifier layer indices. Default ``2,14,25,28`` matches the default 28-layer Qwen3-0.6B model. Use the same four indices as data-only extraction; set matching indices for another verifier. |
-| `training_epochs` | `int` | `3` | Number of training epochs; must be positive. |
-| `training_lr` | `float` | `0.0001` | Positive learning rate for draft-model training. |
-| `training_draft_vocab_size` | `int` | `0` | Draft vocabulary size. ``0`` lets the SDK derive it from the verifier vocabulary. |
-| `training_num_layers` | `int` | `1` | Number of layers in the draft model. |
-| `training_ttt_steps` | `int` | `1` | Number of test-time-training steps. |
-| `training_norm_before_residual` | `bool` | `True` | Apply normalization before the residual connection. |
-| `training_norm_before_fc` | `bool` | `False` | Apply normalization before the fully connected layer. |
-| `training_embed_requires_grad` | `bool` | `False` | Whether the draft embedding weights are trainable. |
-| `training_hidden_states_dtype` | `str` | `bfloat16` | Hidden-state tensor dtype: ``bfloat16``, ``float16``, or ``float32``; it must match the verifier. |
-| `training_scheduler_type` | `str` | `linear` | Learning-rate scheduler: ``linear``, ``cosine``, or ``none``. |
-| `training_scheduler_warmup_steps` | `int` | `0` | Warmup steps; ``0`` lets the SDK compute 1% of total training steps. |
-| `training_scheduler_total_steps` | `int` | `0` | Total scheduler steps; ``0`` lets the SDK calculate the value from epochs and dataset size. |
-| `training_scheduler_num_cosine_cycles` | `float` | `0.5` | Cosine cycles; used only when ``training_scheduler_type="cosine"``. |
-| `training_checkpoint_freq` | `float` | `1.0` | Checkpoint interval in epochs. |
-| `training_save_best` | `bool` | `False` | Save only the best checkpoint by validation loss. |
-| `training_log_freq` | `int` | `1` | Training steps between log updates. |
-| `training_resume_from_checkpoint` | `bool` | `False` | Resume training from a checkpoint when the runtime supports it. |
-| `training_resource_cpu` | `str` | `4` | CPU request for the TrainJob worker, as a Kubernetes quantity. |
-| `training_resource_gpu` | `int` | `1` | Number of GPUs requested for the TrainJob worker. |
-| `training_resource_memory` | `str` | `64Gi` | Memory request for the TrainJob worker, as a Kubernetes quantity. |
-| `packages_to_install` | `str` | `""` | Comma-separated Python packages to install in the TrainJob. |
-| `pip_index_urls` | `str` | `""` | Comma-separated package-index URLs for TrainJob installs. |
-| `job_envs` | `str` | `NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1` | Comma-separated ``KEY=VALUE`` environment overrides for the job. |
-| `job_runtime` | `str` | `speculator-model-opt-cuda` | Name of the runtime used by the job. |
-| `evaluation_max_samples` | `int` | `80` | Maximum requests per evaluation sweep point; must be positive. |
-| `evaluation_max_tokens` | `int` | `256` | Maximum generated tokens per evaluation request; must be positive. |
-| `evaluation_temperature` | `float` | `0.0` | Sampling temperature used by GuideLLM; ``0`` is deterministic. |
-| `evaluation_num_speculative_tokens` | `int` | `5` | Number of draft tokens proposed per step; also used by serving. |
-| `evaluation_gpu_memory_utilization` | `float` | `0.9` | GPU memory fraction for evaluation and serving; range ``(0, 1]``. |
-| `evaluation_startup_timeout_seconds` | `int` | `900` | Maximum seconds to wait for the evaluation vLLM server to become ready. |
-| `evaluation_sample_seed` | `int` | `42` | Seed for deterministic sampling from a local evaluation dataset. |
+| `p01_persistent_pvc` | `str` | `None` | Name of an existing ReadWriteMany PVC mounted at ``/mnt/persistent``; it stores the verifier, hidden states, training data, and model output. |
+| `p02_model_registry_address` | `str` | `None` | Required Model Registry REST host; enter only the hostname. |
+| `p03_model_registry_name` | `str` | `None` | Required model name, unique in the selected registry. |
+| `p04_serving_namespace` | `str` | `None` | Namespace where KServe creates the endpoint; it must match the PVC namespace and have required permissions. |
+| `p05_serving_endpoint_name` | `str` | `None` | Required DNS-compatible KServe InferenceService name. |
+| `p06_verifier_model_pvc` | `str` | `""` | Existing verifier directory on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
+| `p07_training_data_path` | `str` | `speculator-output` | Directory containing the preprocessed dataset from the data extraction pipeline. Default: ``speculator-output``. Use a relative path or matching URI. |
+| `p08_hidden_states_path` | `str` | `speculator-output/hidden_states` | Existing hidden-state directory from data-only extraction. Default: ``speculator-output/hidden_states``. Use a relative path or matching URI. |
+| `p09_output_dir` | `str` | `speculator-output` | Checkpoint and output directory on ``p01_persistent_pvc``. Default: ``speculator-output``. Use a relative path or matching URI. |
+| `p10_evaluation_dataset_uri` | `str` | `""` | Required Hugging Face dataset ID or local JSONL file on ``p01_persistent_pvc``. Use a relative path or matching ``pvc://`` URI. |
+| `p11_total_seq_len` | `int` | `2048` | Positive sequence length for preprocessing and training; keep consistent with the data-only extraction run. |
+| `p12_speculator_type` | `str` | `eagle3` | Draft architecture. ``eagle3`` is currently supported. |
+| `p13_target_layer_ids` | `str` | `2,14,25,28` | Four comma-separated verifier layer IDs. Use the same IDs as data-only extraction; set matching IDs for another verifier. |
+| `p14_training_epochs` | `int` | `3` | Positive number of training epochs. |
+| `p15_training_lr` | `float` | `0.0001` | Positive learning rate for draft-model training. |
+| `p16_training_draft_vocab_size` | `int` | `0` | Draft vocabulary size. ``0`` lets the SDK derive it. |
+| `p17_training_num_layers` | `int` | `1` | Number of layers in the draft model. |
+| `p18_training_test_time_steps` | `int` | `1` | Number of test-time training steps configured for Speculator. |
+| `p19_training_norm_before_residual` | `bool` | `True` | Apply normalization before the residual connection. |
+| `p20_training_norm_before_fc` | `bool` | `False` | Apply normalization before the fully connected layer. |
+| `p21_training_embed_requires_grad` | `bool` | `False` | Whether draft embedding weights are trainable. |
+| `p22_training_hidden_states_dtype` | `str` | `bfloat16` | Hidden-state dtype; it must match the verifier. |
+| `p23_training_scheduler_type` | `str` | `linear` | Learning-rate scheduler: ``linear``, ``cosine``, or ``none``. |
+| `p24_training_scheduler_warmup_steps` | `int` | `0` | Warmup steps; ``0`` lets the SDK calculate 1% of total steps. |
+| `p25_training_scheduler_total_steps` | `int` | `0` | Total scheduler steps; ``0`` lets the SDK calculate them. |
+| `p26_training_scheduler_num_cosine_cycles` | `float` | `0.5` | Cosine cycles, used only by the cosine scheduler. |
+| `p27_training_checkpoint_freq` | `float` | `1.0` | Checkpoint interval in epochs. |
+| `p28_training_save_best` | `bool` | `False` | Save only the best checkpoint by validation loss. |
+| `p29_training_log_freq` | `int` | `1` | Training steps between log updates. |
+| `p30_training_resume_from_checkpoint` | `bool` | `False` | Resume when the runtime supports it. |
+| `p31_training_resource_cpu` | `str` | `4` | CPU request for the training worker. |
+| `p32_training_resource_gpu` | `int` | `1` | Number of GPUs requested for the training worker. |
+| `p33_training_resource_memory` | `str` | `64Gi` | Memory request for the training worker. |
+| `p34_job_envs` | `str` | `NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1` | Comma-separated ``KEY=VALUE`` environment overrides for the job. |
+| `p35_job_runtime` | `str` | `speculator-model-opt-cuda` | Name of the runtime used by the job. |
+| `p36_packages_to_install` | `str` | `""` | Comma-separated Python packages to install for the training job. |
+| `p37_pip_index_urls` | `str` | `""` | Comma-separated package index URLs to use for installs in the training job. |
+| `p38_evaluation_max_samples` | `int` | `80` | Maximum requests per evaluation sweep point; must be positive. |
+| `p39_evaluation_max_tokens` | `int` | `256` | Maximum generated tokens per evaluation request; must be positive. |
+| `p40_evaluation_temperature` | `float` | `0.0` | GuideLLM sampling temperature; ``0`` is deterministic. |
+| `p41_num_speculative_tokens` | `int` | `5` | Draft tokens proposed per step for evaluation and serving. |
+| `p42_gpu_memory_utilization` | `float` | `0.9` | GPU memory fraction for evaluation and serving. It must be greater than 0 and at most 1.0 (for example, 0.1, 0.2, 0.3, up to 1.0). |
+| `p43_evaluation_startup_timeout_seconds` | `int` | `900` | Maximum wait for the evaluation vLLM server. |
+| `p44_evaluation_sample_seed` | `int` | `42` | Seed for sampling from a local evaluation dataset. |
+| `p45_model_registry_port` | `int` | `8080` | HTTP REST service port copied from the registry endpoint; ``8080`` is the default. |
+| `p46_model_registry_version` | `str` | `1.0.0` | Version label for this registration; use a new version per revision. |
+| `p47_serving_runtime_image` | `str` | `registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a` | Red Hat CUDA runtime image used by KServe for Eagle3 draft serving. The pinned default contains vLLM 0.28.0+rhaiv.7. When upgrading, select a compatible vLLM image and replace the digest. |
 
 ## Metadata 🗂️
 
