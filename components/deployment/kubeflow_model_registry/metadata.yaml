@@ -1,3 +1,4 @@
+---
 name: kubeflow_model_registry
 stability: experimental
 dependencies:

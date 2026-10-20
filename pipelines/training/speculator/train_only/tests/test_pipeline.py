@@ -1,6 +1,5 @@
 """Tests for the Speculator train-only pipeline."""
 
-import yaml
 from kfp import compiler
 
 from ..pipeline import speculator_training_pipeline
@@ -46,6 +45,8 @@ def test_progression_metrics_are_not_public_controls():
 
 def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_path):
     """Evaluation follows training, registration follows evaluation, then serving."""
+    import yaml
+
     output_path = tmp_path / "speculator_training.yaml"
     compiler.Compiler().compile(speculator_training_pipeline, package_path=str(output_path))
 
