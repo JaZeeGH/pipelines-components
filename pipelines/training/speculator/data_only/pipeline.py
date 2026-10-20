@@ -5,12 +5,12 @@ import kfp.kubernetes
 from kfp import dsl
 
 from components.data_processing.download_model import download_model as download_model_component
-from components.training.finetuning.speculator import extract_speculator
+from components.training.finetuning.speculator import extract_hidden_states
 
 PVC_SIZE = "200Gi"
 PVC_STORAGE_CLASS = "nfs-csi"
 PVC_ACCESS_MODES = ["ReadWriteMany"]
-PIPELINE_NAME = "speculator-data-only-pipeline"
+PIPELINE_NAME = "speculator-hidden-state-extraction-pipeline"
 
 
 def _attach_k8s(task) -> None:
@@ -35,7 +35,7 @@ def _attach_k8s(task) -> None:
 
 @dsl.pipeline(
     name=PIPELINE_NAME,
-    description="Extract Speculator hidden states using managed or remote vLLM.",
+    description="Extract verifier hidden states for speculative decoding training using managed or remote vLLM.",
     pipeline_config=dsl.PipelineConfig(
         workspace=dsl.WorkspaceConfig(
             size=PVC_SIZE,
@@ -48,12 +48,12 @@ def _attach_k8s(task) -> None:
         ),
     ),
 )
-def speculator_data_only_pipeline(
+def speculator_hidden_state_extraction_pipeline(
     persistent_pvc: str,
     download_model: bool = False,
-    vllm_source: str = "managed",
+    vllm_mode: str = "managed",
     verifier_model: str = "",
-    verifier_model_pvc: str = "models/Qwen--Qwen2.5-1.5B-Instruct",
+    verifier_model_pvc: str = "",
     output_dir: str = "speculator-output",
     dataset_name: str = "ultrachat",
     hidden_states_path: str = "speculator-output/hidden_states",
@@ -61,22 +61,19 @@ def speculator_data_only_pipeline(
     total_seq_len: int = 2048,
     speculator_type: str = "eagle3",
     target_layer_ids: str = "",
-    data_extraction_max_samples: int = 16,
-    data_extraction_regenerate_responses: bool = False,
+    max_samples: int = 16,
+    regenerate_responses: bool = False,
     data_extraction_concurrency: int = 1,
     vllm_resource_gpu: int = 1,
     vllm_resource_memory: str = "96Gi",
     vllm_gpu_memory_utilization: float = 0.9,
     vllm_readiness_timeout_minutes: int = 60,
-    enable_progression_tracking: bool = True,
-    metrics_port: int = 28080,
-    metrics_poll_interval_seconds: int = 30,
     packages_to_install: str = "",
     pip_index_urls: str = "",
-    training_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
-    training_runtime: str = "vllm-extract-cuda",
+    job_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
+    job_runtime: str = "vllm-extract-cuda",
 ):
-    """Extract verifier hidden states using managed or remote vLLM.
+    """Extract verifier hidden states for speculative decoding training using managed or remote vLLM.
 
     Managed mode runs vLLM in the Trainer job. When ``download_model`` is true,
     ``verifier_model`` is downloaded to ``persistent_pvc``; otherwise, managed mode
@@ -95,11 +92,12 @@ def speculator_data_only_pipeline(
             local datasets, and outputs.
         download_model: Download ``verifier_model`` to the PVC. Remote mode uses
             ``verifier_model_pvc``, which must point to the downloaded or cached model.
-        vllm_source: Use ``managed`` for a vLLM sidecar in the Trainer job or ``remote`` for an external vLLM service.
+        vllm_mode: Use ``managed`` for a vLLM sidecar in the Trainer job or ``remote`` for an external vLLM service.
         verifier_model: Hugging Face Hub model ID to download when ``download_model`` is
             true; leave empty when reusing ``verifier_model_pvc``.
-        verifier_model_pvc: Path to the cached or downloaded verifier on the PVC; use
-            a relative path or a ``pvc://`` URI.
+        verifier_model_pvc: Path to the cached or downloaded verifier on the PVC;
+            required when reusing a cached model or using remote vLLM. Use a relative
+            path or a ``pvc://`` URI.
         output_dir: Trainer output directory on the PVC. ``speculator-output`` is the
             default; choose another relative path or a URI for that PVC.
         dataset_name: Use ``magpie`` (Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered),
@@ -115,8 +113,8 @@ def speculator_data_only_pipeline(
         target_layer_ids: Exactly four comma-separated verifier layer indices; required
             for the default PVC-backed verifier and remote vLLM. The SDK can infer them
             only from a Hugging Face model ID passed directly.
-        data_extraction_max_samples: Maximum samples to process; ``0`` processes the full dataset.
-        data_extraction_regenerate_responses: Regenerate responses with the verifier;
+        max_samples: Maximum samples to process; ``0`` processes the full dataset.
+        regenerate_responses: Regenerate responses with the verifier;
             supported only for ``magpie``, ``ultrachat``, and ``gsm8k``.
         data_extraction_concurrency: Number of concurrent vLLM requests for
             hidden-state extraction; use ``1`` on shared or NFS storage.
@@ -125,13 +123,10 @@ def speculator_data_only_pipeline(
         vllm_gpu_memory_utilization: Fraction of GPU memory available to vLLM, in the range ``(0, 1]``.
         vllm_readiness_timeout_minutes: Maximum wait for the managed or remote vLLM
             endpoint to become ready, in minutes; minimum ``1``.
-        enable_progression_tracking: Enable Speculator extraction progress reporting.
-        metrics_port: HTTP port for extraction metrics; valid range is ``1024``-``65535``.
-        metrics_poll_interval_seconds: Seconds between metrics polls; valid range is ``5``-``300``.
         packages_to_install: Comma-separated Python packages to install in the Trainer job.
         pip_index_urls: Comma-separated package-index URLs used for Trainer job installs.
-        training_envs: Comma-separated ``KEY=VALUE`` environment overrides for the Trainer job.
-        training_runtime: Name of the ClusterTrainingRuntime used by the Trainer job.
+        job_envs: Comma-separated ``KEY=VALUE`` environment overrides for the extraction job.
+        job_runtime: Name of the cluster runtime used by the extraction job.
     """
     common_kwargs = dict(
         output_dir=output_dir,
@@ -141,20 +136,17 @@ def speculator_data_only_pipeline(
         total_seq_len=total_seq_len,
         speculator_type=speculator_type,
         target_layer_ids=target_layer_ids,
-        data_extraction_max_samples=data_extraction_max_samples,
-        data_extraction_regenerate_responses=data_extraction_regenerate_responses,
+        data_extraction_max_samples=max_samples,
+        data_extraction_regenerate_responses=regenerate_responses,
         data_extraction_concurrency=data_extraction_concurrency,
         vllm_resource_gpu=vllm_resource_gpu,
         vllm_resource_memory=vllm_resource_memory,
         vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
         vllm_readiness_timeout_minutes=vllm_readiness_timeout_minutes,
-        enable_progression_tracking=enable_progression_tracking,
-        metrics_port=metrics_port,
-        metrics_poll_interval_seconds=metrics_poll_interval_seconds,
         packages_to_install=packages_to_install,
         pip_index_urls=pip_index_urls,
-        training_envs=training_envs,
-        training_runtime=training_runtime,
+        training_envs=job_envs,
+        training_runtime=job_runtime,
         persistent_pvc=persistent_pvc,
         persistent_mount_path="/mnt/persistent",
         download_model=download_model,
@@ -180,8 +172,8 @@ def speculator_data_only_pipeline(
         mount_path="/mnt/persistent",
     )
 
-    with dsl.If(vllm_source == "managed", name="vllm-connected"):
-        managed_task = extract_speculator(
+    with dsl.If(vllm_mode == "managed", name="managed-vllm"):
+        managed_task = extract_hidden_states(
             verifier_model=verifier_model,
             vllm_source="managed",
             **common_kwargs,
@@ -194,8 +186,8 @@ def speculator_data_only_pipeline(
         )
         _attach_k8s(managed_task)
 
-    with dsl.Else(name="vllm-disconnected"):
-        remote_task = extract_speculator(
+    with dsl.Else(name="remote-vllm"):
+        remote_task = extract_hidden_states(
             verifier_model=verifier_model_pvc,
             vllm_source="remote",
             vllm_endpoint=vllm_endpoint,
@@ -212,6 +204,6 @@ def speculator_data_only_pipeline(
 
 if __name__ == "__main__":
     kfp.compiler.Compiler().compile(
-        pipeline_func=speculator_data_only_pipeline,
+        pipeline_func=speculator_hidden_state_extraction_pipeline,
         package_path=__file__.replace(".py", ".yaml"),
     )

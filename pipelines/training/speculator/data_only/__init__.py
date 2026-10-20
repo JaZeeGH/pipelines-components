@@ -1,1 +1,1 @@
-"""Managed Speculator data extraction pipeline."""
+"""Speculator hidden-state extraction pipeline."""

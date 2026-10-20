@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from ..component import extract_speculator
+from ..component import extract_hidden_states
 
 
 def _mock_run_speculator(monkeypatch):
@@ -20,18 +20,18 @@ class TestSpeculatorExtractionComponent:
 
     def test_component_function_exists(self):
         """Verify the extraction component is exposed as a KFP component."""
-        assert callable(extract_speculator)
-        assert hasattr(extract_speculator, "python_func")
+        assert callable(extract_hidden_states)
+        assert hasattr(extract_hidden_states, "python_func")
 
     def test_component_has_extraction_parameters(self):
         """Verify extraction-specific parameters are exposed."""
-        params = inspect.signature(extract_speculator.python_func).parameters
+        params = inspect.signature(extract_hidden_states.python_func).parameters
         for name in ("verifier_model", "dataset_name", "output_hidden_states", "vllm_endpoint"):
             assert name in params
 
     def test_component_has_fixed_mode(self):
         """Verify extraction does not expose a mode selector."""
-        assert "mode" not in inspect.signature(extract_speculator.python_func).parameters
+        assert "mode" not in inspect.signature(extract_hidden_states.python_func).parameters
 
     def test_managed_mode_uses_pvc_verifier_when_download_is_disabled(self, monkeypatch):
         """Managed extraction uses the configured PVC model when reusing a cached verifier."""
@@ -39,7 +39,7 @@ class TestSpeculatorExtractionComponent:
         fake_speculator = mock.MagicMock(run_speculator=run_speculator)
         monkeypatch.setitem(sys.modules, "speculator", fake_speculator)
 
-        result = extract_speculator.python_func(
+        result = extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
             verifier_model_pvc="models/Qwen3-0.6B",
             output_dir="speculator-output",
@@ -62,7 +62,7 @@ class TestSpeculatorExtractionComponent:
             mock.MagicMock(run_speculator=run_speculator),
         )
 
-        extract_speculator.python_func(
+        extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen3-0.6B",
             verifier_model_pvc="models/Qwen--Qwen3-0.6B",
             output_dir="speculator-output",
@@ -79,7 +79,7 @@ class TestSpeculatorExtractionComponent:
     def test_remote_mode_requires_a_vllm_endpoint(self, tmp_path, endpoint):
         """Remote extraction fails early instead of silently selecting managed vLLM."""
         with pytest.raises(ValueError, match="vllm_endpoint is required when vllm_source='remote'"):
-            extract_speculator.python_func(
+            extract_hidden_states.python_func(
                 verifier_model="models/Qwen3-0.6B",
                 output_dir="speculator-output",
                 pvc_path="/workspace",
@@ -93,7 +93,7 @@ class TestSpeculatorExtractionComponent:
     def test_managed_mode_rejects_an_external_vllm_endpoint(self):
         """A configured endpoint cannot be ignored by managed extraction."""
         with pytest.raises(ValueError, match="must be omitted when vllm_source='managed'"):
-            extract_speculator.python_func(
+            extract_hidden_states.python_func(
                 verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
                 output_dir="speculator-output",
                 pvc_path="/workspace",
@@ -106,7 +106,7 @@ class TestSpeculatorExtractionComponent:
         """A non-empty remote endpoint is forwarded without surrounding whitespace."""
         run_speculator = _mock_run_speculator(monkeypatch)
 
-        extract_speculator.python_func(
+        extract_hidden_states.python_func(
             verifier_model="pvc://shared/models/Qwen3-0.6B",
             output_dir="speculator-output",
             pvc_path="/workspace",
@@ -127,7 +127,7 @@ class TestSpeculatorExtractionComponent:
         dataset_path.write_text('{"question":"test"}\n')
         run_speculator = _mock_run_speculator(monkeypatch)
 
-        result = extract_speculator.python_func(
+        result = extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
             output_dir="speculator-output",
             pvc_path="/workspace",
@@ -148,7 +148,7 @@ class TestSpeculatorExtractionComponent:
         dataset_path.write_text('{"question":"test"}\n')
         run_speculator = _mock_run_speculator(monkeypatch)
 
-        extract_speculator.python_func(
+        extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
             output_dir="speculator-output",
             pvc_path="/workspace",
@@ -170,7 +170,7 @@ class TestSpeculatorExtractionComponent:
         pvc_root.mkdir()
 
         with pytest.raises(ValueError, match="remain within persistent_mount_path"):
-            extract_speculator.python_func(
+            extract_hidden_states.python_func(
                 verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
                 output_dir="speculator-output",
                 pvc_path="/workspace",
@@ -185,7 +185,7 @@ class TestSpeculatorExtractionComponent:
         pvc_root.mkdir()
 
         with pytest.raises(FileNotFoundError, match="dataset file not found on persistent_pvc"):
-            extract_speculator.python_func(
+            extract_hidden_states.python_func(
                 verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
                 output_dir="speculator-output",
                 pvc_path="/workspace",
@@ -198,7 +198,7 @@ class TestSpeculatorExtractionComponent:
         """Existing Trainer PVC URIs retain their claim-based semantics."""
         run_speculator = _mock_run_speculator(monkeypatch)
 
-        extract_speculator.python_func(
+        extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
             output_dir="speculator-output",
             pvc_path="/workspace",
@@ -218,7 +218,7 @@ class TestSpeculatorExtractionComponent:
         dataset_path.write_text('{"question":"test"}\n')
         run_speculator = _mock_run_speculator(monkeypatch)
 
-        extract_speculator.python_func(
+        extract_hidden_states.python_func(
             verifier_model="Qwen/Qwen2.5-1.5B-Instruct",
             output_dir="speculator-output",
             pvc_path="/workspace",

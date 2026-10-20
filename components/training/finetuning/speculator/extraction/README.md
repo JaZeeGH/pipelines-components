@@ -75,7 +75,7 @@ For example, with ``persistent_pvc="shared"``, the relative ``verifier_model_pvc
   - speculator
   - speculative_decoding
   - hidden_state_extraction
-- **Last Verified**: 2026-09-10 00:00:00+00:00
+- **Last Verified**: 2026-10-20 00:00:00+00:00
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:

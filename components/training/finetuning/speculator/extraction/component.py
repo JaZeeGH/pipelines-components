@@ -25,7 +25,7 @@ _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
         dsl.TaskConfigPassthrough(field=dsl.TaskConfigField.KUBERNETES_VOLUMES, apply_to_task=True),
     ],
 )
-def extract_speculator(
+def extract_hidden_states(
     verifier_model: str,
     output_dir: str,
     pvc_path: str,

@@ -1,5 +1,5 @@
 ---
-name: speculator_data_only_pipeline
+name: speculator_hidden_state_extraction_pipeline
 stability: alpha
 dependencies:
   kubeflow:
@@ -15,6 +15,6 @@ tags:
   - speculator
   - speculative_decoding
   - pipeline
-lastVerified: 2026-09-08T00:00:00Z
+lastVerified: 2026-10-20T00:00:00Z
 links:
   documentation: https://github.com/kubeflow/trainer
