@@ -26,7 +26,7 @@ def _attach_hf_token(task) -> None:
 
 
 def _attach_trainer_credentials(task) -> None:
-    """Attach Kubernetes and optional Hugging Face credentials to a Trainer task."""
+    """Attach Kubernetes credentials to a KFP launcher that submits a Trainer job."""
     task.set_caching_options(False)
     kfp.kubernetes.set_image_pull_policy(task, "IfNotPresent")
     kfp.kubernetes.use_secret_as_env(
@@ -38,7 +38,6 @@ def _attach_trainer_credentials(task) -> None:
         },
         optional=False,
     )
-    _attach_hf_token(task)
 
 
 @dsl.pipeline(
@@ -62,64 +61,62 @@ def _attach_trainer_credentials(task) -> None:
 def speculator_offline_pipeline(
     # Required inputs & storage
     p01_persistent_pvc: str,
-    # Verifier model (must already exist on PVC)
     p02_verifier_model_pvc: str,
-    # External vLLM endpoint
     p03_vllm_endpoint: str,
-    # Data extraction configuration (built-in or JSON/JSONL on PVC)
     p04_dataset_name: str,
-    p05_data_extraction_max_samples: int = 0,
-    p06_data_extraction_regenerate_responses: bool = False,
-    p07_data_extraction_concurrency: int = 1,
+    p05_evaluation_dataset_uri: str,
+    p06_serving_namespace: str,
+    # Data extraction configuration
+    p07_data_extraction_max_samples: int = 0,
+    p08_data_extraction_regenerate_responses: bool = False,
+    p09_data_extraction_concurrency: int = 1,
     # Storage paths
-    p08_output_dir: str = "speculator-output",
-    p09_hidden_states_path: str = "speculator-output/hidden_states",
-    p10_training_data_path: str = "speculator-output",
+    p10_output_dir: str = "speculator-output",
+    p11_hidden_states_path: str = "speculator-output/hidden_states",
+    p12_training_data_path: str = "speculator-output",
     # Model architecture
-    p11_total_seq_len: int = 2048,
-    p12_speculator_type: str = "eagle3",
-    p13_target_layer_ids: str = "",
+    p13_total_seq_len: int = 2048,
+    p14_speculator_type: str = "eagle3",
+    p15_target_layer_ids: str = "",
     # Training configuration
-    p14_training_epochs: int = 3,
-    p15_training_lr: float = 0.0001,
-    p16_training_draft_vocab_size: int = 0,
-    p17_training_num_layers: int = 1,
-    p18_training_test_time_steps: int = 1,
-    p19_training_norm_before_residual: bool = True,
-    p20_training_norm_before_fc: bool = False,
-    p21_training_embed_requires_grad: bool = False,
-    p22_training_hidden_states_dtype: str = "bfloat16",
-    p23_training_scheduler_type: str = "linear",
-    p24_training_scheduler_warmup_steps: int = 0,
-    p25_training_scheduler_total_steps: int = 0,
-    p26_training_scheduler_num_cosine_cycles: float = 0.5,
-    p27_training_checkpoint_freq: float = 1.0,
-    p28_training_save_best: bool = False,
-    p29_training_log_freq: int = 1,
-    p30_training_resume_from_checkpoint: bool = False,
-    p31_training_resource_cpu: str = "4",
-    p32_training_resource_gpu: int = 1,
-    p33_training_resource_memory: str = "64Gi",
-    p34_job_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
-    p35_job_runtime: str = "speculator-model-opt-cuda",
-    p36_packages_to_install: str = "",
-    p37_pip_index_urls: str = "",
+    p16_training_epochs: int = 3,
+    p17_training_lr: float = 0.0001,
+    p18_training_draft_vocab_size: int = 0,
+    p19_training_num_layers: int = 1,
+    p20_training_test_time_steps: int = 1,
+    p21_training_norm_before_residual: bool = True,
+    p22_training_norm_before_fc: bool = False,
+    p23_training_embed_requires_grad: bool = False,
+    p24_training_hidden_states_dtype: str = "bfloat16",
+    p25_training_scheduler_type: str = "linear",
+    p26_training_scheduler_warmup_steps: int = 0,
+    p27_training_scheduler_total_steps: int = 0,
+    p28_training_scheduler_num_cosine_cycles: float = 0.5,
+    p29_training_checkpoint_freq: float = 1.0,
+    p30_training_save_best: bool = False,
+    p31_training_log_freq: int = 1,
+    p32_training_resume_from_checkpoint: bool = False,
+    p33_training_resource_cpu: str = "4",
+    p34_training_resource_gpu: int = 1,
+    p35_training_resource_memory: str = "64Gi",
+    p36_job_envs: str = "NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1",
+    p37_job_runtime: str = "speculator-model-opt-cuda",
+    p38_packages_to_install: str = "",
+    p39_pip_index_urls: str = "",
     # Evaluation configuration
-    p38_evaluation_dataset_uri: str = "",
-    p39_evaluation_max_samples: int = 80,
-    p40_evaluation_max_tokens: int = 256,
-    p41_evaluation_temperature: float = 0.0,
-    p42_evaluation_num_speculative_tokens: int = 5,
-    p43_evaluation_gpu_memory_utilization: float = 0.9,
-    p44_evaluation_startup_timeout_seconds: int = 900,
-    p45_evaluation_sample_seed: int = 42,
+    p40_evaluation_max_samples: int = 80,
+    p41_evaluation_max_tokens: int = 256,
+    p42_evaluation_temperature: float = 0.0,
+    p43_evaluation_num_speculative_tokens: int = 5,
+    p44_evaluation_gpu_memory_utilization: float = 0.9,
+    p45_evaluation_startup_timeout_seconds: int = 900,
+    p46_evaluation_sample_seed: int = 42,
     # Model registry
-    p46_model_registry_address: str = "",
-    p47_model_registry_port: int = 8080,
-    p48_model_registry_name: str = "speculator-offline-draft",
-    p49_model_registry_version: str = "1.0.0",
+    p47_model_registry_address: str = "",
+    p48_model_registry_port: int = 8080,
+    p49_model_registry_name: str = "speculator-offline-draft",
+    p50_model_registry_version: str = "1.0.0",
     # Serving deployment
-    p50_serving_namespace: str = "",
     p51_serving_endpoint_name: str = "speculator-offline",
     p52_serving_runtime_image: str = (
         "registry.redhat.io/rhaii-fast/vllm-cuda-rhel9"
@@ -138,15 +135,15 @@ def speculator_offline_pipeline(
 
     ``p01_persistent_pvc`` is an existing ReadWriteMany PVC in the pipeline namespace.
     It stores the verifier, datasets, extraction outputs, training checkpoints, and
-    final draft, and must also be available in ``p50_serving_namespace``. Its
-    ``p50_serving_namespace`` input must be set for a run. The
+    final draft, and must also be available in ``p06_serving_namespace``. Its
+    ``p06_serving_namespace`` input must be set for a run. The
     PVC is mounted at ``/mnt/persistent``. With ``p01_persistent_pvc="shared"``,
-    ``p08_output_dir="speculator-output"`` resolves to
+    ``p10_output_dir="speculator-output"`` resolves to
     ``pvc://shared/speculator-output``.
 
     The parameter prefixes follow execution order: storage, verifier, extraction,
     paths, architecture, training, evaluation, registry, and serving. The Registry
-    address ``p46_model_registry_address`` is optional; leave it empty to skip
+    address ``p47_model_registry_address`` is optional; leave it empty to skip
     registration. If provided, enter only the hostname and omit the URL scheme and
     API path. The pipeline ServiceAccount needs a RoleBinding to
     ``registry-user-<registry-name>`` in the Registry namespace.
@@ -165,21 +162,26 @@ def speculator_offline_pipeline(
     identify a JSON/JSONL dataset already on the PVC. Only these built-in datasets and
     local JSON/JSONL files are supported in offline mode.
 
-    Extraction writes hidden states to ``p09_hidden_states_path`` and processed data
-    below ``p08_output_dir``. Training reads processed data from
-    ``p10_training_data_path`` and hidden states from ``p09_hidden_states_path``.
-    Their defaults match the extraction output; if ``p08_output_dir`` changes, update
-    both paths. ``p13_target_layer_ids`` defaults to empty; supply the verifier's
-    four comma-separated layer IDs. ``p05_data_extraction_max_samples=0`` processes all
-    examples; response regeneration (``p06_data_extraction_regenerate_responses``) applies
-    to built-in datasets, and concurrency ``p07_data_extraction_concurrency=1`` is
+    Extraction writes hidden states to ``p11_hidden_states_path`` and processed data
+    below ``p10_output_dir``. Training reads processed data from
+    ``p12_training_data_path`` and hidden states from ``p11_hidden_states_path``.
+    Their defaults match the extraction output; if ``p10_output_dir`` changes, update
+    both paths. ``p15_target_layer_ids`` defaults to empty; supply the verifier's
+    four comma-separated layer IDs. ``p07_data_extraction_max_samples=0`` processes all
+    examples; response regeneration (``p08_data_extraction_regenerate_responses``) applies
+    to built-in datasets, and concurrency ``p09_data_extraction_concurrency=1`` is
     recommended on shared/NFS PVCs.
 
-    Extraction and training use the same ``p35_job_runtime``. The jobs share
-    environment overrides, packages, and package indexes through ``p34_job_envs``,
-    ``p36_packages_to_install``, and ``p37_pip_index_urls``. A ``kubernetes-credentials``
-    secret with ``KUBERNETES_SERVER_URL`` and ``KUBERNETES_AUTH_TOKEN`` is required by
-    both Trainer stages.
+    Extraction and training use the same ``p37_job_runtime``. The jobs share
+    environment overrides, packages, and package indexes through ``p36_job_envs``,
+    ``p38_packages_to_install``, and ``p39_pip_index_urls``. Package installation runs
+    in Trainer worker pods; restrict run access for these inputs to trusted users and
+    approved package sources. The ``kubernetes-credentials`` secret with
+    ``KUBERNETES_SERVER_URL`` and ``KUBERNETES_AUTH_TOKEN`` is mounted only in the KFP
+    launcher tasks to submit and monitor Trainer jobs, not forwarded to Trainer workers.
+    Scope it to the minimum Trainer API permissions required for runtime selection,
+    job submission, and monitoring. The optional ``hf-token`` secret is attached only
+    to evaluation.
 
     ### Training and evaluation
 
@@ -189,101 +191,101 @@ def speculator_offline_pipeline(
     Each run replaces this shared path; use a separate PVC per revision if earlier
     Registry versions must continue referencing their original weights.
 
-    ``p38_evaluation_dataset_uri`` must identify a Hugging Face dataset ID or a
+    ``p05_evaluation_dataset_uri`` must identify a Hugging Face dataset ID or a
     JSON/JSONL file on the PVC. Local paths are relative to the PVC mount, and
     ``pvc://`` URIs must reference ``p01_persistent_pvc``. Avoid leading or trailing
     whitespace. Evaluation receives only the optional ``hf-token`` secret, not
     Kubernetes Trainer credentials.
-    ``p39``–``p45`` control the evaluation request limit, generation, sampling, and
+    ``p40``–``p46`` control the evaluation request limit, generation, sampling, and
     startup timeout.
 
     ### Model Registry and serving
 
     In the RHOAI dashboard, open **AI Hub > Models > Model registries** and create or
     select a registry. Copy its HTTP REST service URL. Put only the hostname in
-    ``p46_model_registry_address`` and the service port in ``p47_model_registry_port``;
+    ``p47_model_registry_address`` and the service port in ``p48_model_registry_port``;
     omit the scheme and API path. For example, for
     ``http://registry-service.registry-namespace.svc:8080/api/model_registry/v1alpha3``,
     use ``registry-service.registry-namespace.svc`` and ``8080``. Set a unique model
-    name in ``p48_model_registry_name`` and use a new ``p49_model_registry_version``
+    name in ``p49_model_registry_name`` and use a new ``p50_model_registry_version``
     for each revision.
 
     Serving creates a cluster-local KServe InferenceService using the verifier at
-    ``p02_verifier_model_pvc`` and the draft at ``final_model``. ``p50_serving_namespace``
+    ``p02_verifier_model_pvc`` and the draft at ``final_model``. ``p06_serving_namespace``
     must access the PVC; the pipeline ServiceAccount needs permission to manage the
     ServingRuntime and InferenceService and read the predictor Deployment.
     ``p51_serving_endpoint_name`` must be DNS-compatible. The pinned compatible vLLM
     CUDA image is the default for ``p52_serving_runtime_image``.
-    ``p11_total_seq_len``, ``p42_evaluation_num_speculative_tokens``, and
-    ``p43_evaluation_gpu_memory_utilization`` apply to evaluation and serving.
+    ``p13_total_seq_len``, ``p43_evaluation_num_speculative_tokens``, and
+    ``p44_evaluation_gpu_memory_utilization`` apply to evaluation and serving.
 
     Zero-padded ``pNN_`` prefixes preserve parameter order in the KFP UI.
 
     Args:
         p01_persistent_pvc: Required name of the existing ReadWriteMany PVC in the pipeline namespace. It stores
             the verifier, datasets, extraction outputs, checkpoints, and final draft; KServe must also access it in
-            ``p50_serving_namespace``. The PVC is mounted at ``/mnt/persistent``.
-        p02_verifier_model_pvc: Required verifier model directory relative to the PVC. The model must already exist
-            at this path; the pipeline does not download verifier models from HuggingFace.
+            ``p06_serving_namespace``. The PVC is mounted at ``/mnt/persistent``.
+        p02_verifier_model_pvc: Required verifier model directory on the PVC, as a relative path or matching
+            ``pvc://`` URI. The model must already exist there; the pipeline does not download verifier models.
         p03_vllm_endpoint: Required URL for the external vLLM service. Set it to an endpoint that can access the
             verifier and hidden-state paths on ``p01_persistent_pvc``.
-        p04_dataset_name: Built-in dataset name or an existing JSON/JSONL dataset on the PVC. Supported built-ins
-            are ``magpie``, ``ultrachat``, and ``gsm8k``; only these and local JSON/JSONL files are supported in
-            offline mode.
-        p05_data_extraction_max_samples: Maximum extraction examples. Set to ``0`` to process the full dataset.
-        p06_data_extraction_regenerate_responses: Regenerate assistant responses with the verifier instead of using
+        p04_dataset_name: Required built-in dataset name or PVC URI to JSON/JSONL file. Supported built-ins
+            are ``magpie``, ``ultrachat``, and ``gsm8k``; PVC URIs must use ``pvc://<pvc-name>/<path>`` format.
+        p05_evaluation_dataset_uri: Required Hugging Face dataset ID or local JSON/JSONL file. A ``pvc://`` URI must
+            reference ``p01_persistent_pvc``.
+        p06_serving_namespace: Required KServe namespace; must access the PVC. The pipeline ServiceAccount needs
+            permission to manage the ServingRuntime and InferenceService.
+        p07_data_extraction_max_samples: Maximum extraction examples. Set to ``0`` to process the full dataset.
+        p08_data_extraction_regenerate_responses: Regenerate assistant responses with the verifier instead of using
             original responses. Supported only for the built-in datasets.
-        p07_data_extraction_concurrency: Number of concurrent extraction requests. Use ``1`` on shared or NFS PVCs.
-        p08_output_dir: PVC-relative directory for extraction output, processed training data, and checkpoints. The
+        p09_data_extraction_concurrency: Number of concurrent extraction requests. Use ``1`` on shared or NFS PVCs.
+        p10_output_dir: PVC-relative directory for extraction output, processed training data, and checkpoints. The
             final draft is copied to ``final_model`` at the PVC root.
-        p09_hidden_states_path: PVC-relative hidden-state directory written by extraction and read by training. Keep
+        p11_hidden_states_path: PVC-relative hidden-state directory written by extraction and read by training. Keep
             this path aligned with the output directory.
-        p10_training_data_path: Directory containing the processed dataset written by extraction. Keep it aligned
-            with ``p08_output_dir`` when changing the defaults.
-        p11_total_seq_len: Positive maximum sequence length used for extraction, training, evaluation, and serving.
-        p12_speculator_type: Draft architecture. The current Trainer and evaluator support ``eagle3``.
-        p13_target_layer_ids: Four comma-separated verifier layer IDs. It defaults to empty; provide the IDs for the
+        p12_training_data_path: Directory containing the processed dataset written by extraction. Keep it aligned
+            with ``p10_output_dir`` when changing the defaults.
+        p13_total_seq_len: Positive maximum sequence length used for extraction, training, evaluation, and serving.
+        p14_speculator_type: Draft architecture. The current Trainer and evaluator support ``eagle3``.
+        p15_target_layer_ids: Four comma-separated verifier layer IDs. It defaults to empty; provide the IDs for the
             selected verifier.
-        p14_training_epochs: Number of training epochs.
-        p15_training_lr: Learning rate for draft-model training.
-        p16_training_draft_vocab_size: Draft vocabulary size. ``0`` lets the Trainer SDK derive it.
-        p17_training_num_layers: Number of layers in the draft model.
-        p18_training_test_time_steps: Number of test-time training steps configured for Speculator.
-        p19_training_norm_before_residual: Apply normalization before the residual connection.
-        p20_training_norm_before_fc: Apply normalization before the fully connected layer.
-        p21_training_embed_requires_grad: Whether draft embedding weights are trainable.
-        p22_training_hidden_states_dtype: Hidden-state dtype; it must match the verifier model.
-        p23_training_scheduler_type: Learning-rate scheduler: ``linear``, ``cosine``, or ``none``.
-        p24_training_scheduler_warmup_steps: Warmup steps. ``0`` lets the SDK calculate them.
-        p25_training_scheduler_total_steps: Total scheduler steps. ``0`` lets the SDK calculate them.
-        p26_training_scheduler_num_cosine_cycles: Number of cosine cycles; ignored by other scheduler types.
-        p27_training_checkpoint_freq: Checkpoint interval in epochs.
-        p28_training_save_best: Save the best checkpoint by validation loss.
-        p29_training_log_freq: Number of training steps between log updates.
-        p30_training_resume_from_checkpoint: Resume from a saved checkpoint when supported by the runtime.
-        p31_training_resource_cpu: CPU request for the training worker.
-        p32_training_resource_gpu: Number of GPUs requested for the training worker.
-        p33_training_resource_memory: Memory request for the training worker.
-        p34_job_envs: Comma-separated ``KEY=VALUE`` environment overrides shared by extraction and training jobs.
-        p35_job_runtime: ClusterTrainingRuntime shared by hidden-state extraction and draft training.
-        p36_packages_to_install: Comma-separated Python packages installed in extraction and training jobs.
-        p37_pip_index_urls: Comma-separated package-index URLs used when installing job packages.
-        p38_evaluation_dataset_uri: Hugging Face dataset ID or JSON/JSONL path; must be set;
-            a ``pvc://`` URI must reference ``p01_persistent_pvc``.
-        p39_evaluation_max_samples: Maximum GuideLLM requests per evaluation sweep point; must be positive.
-        p40_evaluation_max_tokens: Maximum tokens generated per evaluation request; must be positive.
-        p41_evaluation_temperature: Sampling temperature passed to GuideLLM. ``0`` is deterministic.
-        p42_evaluation_num_speculative_tokens: Draft tokens proposed per step in evaluation and serving.
-        p43_evaluation_gpu_memory_utilization: GPU memory fraction for evaluation and serving, greater than ``0`` and
+        p16_training_epochs: Number of training epochs.
+        p17_training_lr: Learning rate for draft-model training.
+        p18_training_draft_vocab_size: Draft vocabulary size. ``0`` lets the Trainer SDK derive it.
+        p19_training_num_layers: Number of layers in the draft model.
+        p20_training_test_time_steps: Number of test-time training steps configured for Speculator.
+        p21_training_norm_before_residual: Apply normalization before the residual connection.
+        p22_training_norm_before_fc: Apply normalization before the fully connected layer.
+        p23_training_embed_requires_grad: Whether draft embedding weights are trainable.
+        p24_training_hidden_states_dtype: Hidden-state dtype; it must match the verifier model.
+        p25_training_scheduler_type: Learning-rate scheduler: ``linear``, ``cosine``, or ``none``.
+        p26_training_scheduler_warmup_steps: Warmup steps. ``0`` lets the SDK calculate them.
+        p27_training_scheduler_total_steps: Total scheduler steps. ``0`` lets the SDK calculate them.
+        p28_training_scheduler_num_cosine_cycles: Number of cosine cycles; ignored by other scheduler types.
+        p29_training_checkpoint_freq: Checkpoint interval in epochs.
+        p30_training_save_best: Save the best checkpoint by validation loss.
+        p31_training_log_freq: Number of training steps between log updates.
+        p32_training_resume_from_checkpoint: Resume from a saved checkpoint when supported by the runtime.
+        p33_training_resource_cpu: CPU request for the training worker.
+        p34_training_resource_gpu: Number of GPUs requested for the training worker.
+        p35_training_resource_memory: Memory request for the training worker.
+        p36_job_envs: Comma-separated ``KEY=VALUE`` environment overrides shared by extraction and training jobs.
+        p37_job_runtime: ClusterTrainingRuntime shared by hidden-state extraction and draft training.
+        p38_packages_to_install: Comma-separated Python packages installed in extraction and training jobs.
+        p39_pip_index_urls: Comma-separated package-index URLs used when installing job packages.
+        p40_evaluation_max_samples: Maximum GuideLLM requests per evaluation sweep point; must be positive.
+        p41_evaluation_max_tokens: Maximum tokens generated per evaluation request; must be positive.
+        p42_evaluation_temperature: Sampling temperature passed to GuideLLM. ``0`` is deterministic.
+        p43_evaluation_num_speculative_tokens: Draft tokens proposed per step in evaluation and serving.
+        p44_evaluation_gpu_memory_utilization: GPU memory fraction for evaluation and serving, greater than ``0`` and
             at most ``1.0``.
-        p44_evaluation_startup_timeout_seconds: Maximum wait for the evaluation vLLM server to become ready.
-        p45_evaluation_sample_seed: Seed used for deterministic sampling of local evaluation datasets.
-        p46_model_registry_address: Model Registry hostname. Enter only the host, not the scheme or API path. Its
+        p45_evaluation_startup_timeout_seconds: Maximum wait for the evaluation vLLM server to become ready.
+        p46_evaluation_sample_seed: Seed used for deterministic sampling of local evaluation datasets.
+        p47_model_registry_address: Model Registry hostname. Enter only the host, not the scheme or API path. Its
             default is empty, which skips registration.
-        p47_model_registry_port: HTTP REST service port copied from the Model Registry URL; ``8080`` is common.
-        p48_model_registry_name: Name assigned to the registered draft model; use a unique name in the registry.
-        p49_model_registry_version: Version label for this registration. Use a new value for each revision.
-        p50_serving_namespace: KServe namespace; must be set to access the PVC.
+        p48_model_registry_port: HTTP REST service port copied from the Model Registry URL; ``8080`` is common.
+        p49_model_registry_name: Name assigned to the registered draft model; use a unique name in the registry.
+        p50_model_registry_version: Version label for this registration. Use a new value for each revision.
         p51_serving_endpoint_name: DNS-compatible name for the KServe InferenceService.
         p52_serving_runtime_image: Pinned compatible vLLM CUDA image pull spec used by KServe; override only with a
             compatible image.
@@ -292,52 +294,52 @@ def speculator_offline_pipeline(
     verifier_model_pvc = p02_verifier_model_pvc
     vllm_endpoint = p03_vllm_endpoint
     dataset_name = p04_dataset_name
-    data_extraction_max_samples = p05_data_extraction_max_samples
-    data_extraction_regenerate_responses = p06_data_extraction_regenerate_responses
-    data_extraction_concurrency = p07_data_extraction_concurrency
-    output_dir = p08_output_dir
-    hidden_states_path = p09_hidden_states_path
-    training_data_path = p10_training_data_path
-    total_seq_len = p11_total_seq_len
-    speculator_type = p12_speculator_type
-    target_layer_ids = p13_target_layer_ids
-    training_epochs = p14_training_epochs
-    training_lr = p15_training_lr
-    training_draft_vocab_size = p16_training_draft_vocab_size
-    training_num_layers = p17_training_num_layers
-    training_ttt_steps = p18_training_test_time_steps
-    training_norm_before_residual = p19_training_norm_before_residual
-    training_norm_before_fc = p20_training_norm_before_fc
-    training_embed_requires_grad = p21_training_embed_requires_grad
-    training_hidden_states_dtype = p22_training_hidden_states_dtype
-    training_scheduler_type = p23_training_scheduler_type
-    training_scheduler_warmup_steps = p24_training_scheduler_warmup_steps
-    training_scheduler_total_steps = p25_training_scheduler_total_steps
-    training_scheduler_num_cosine_cycles = p26_training_scheduler_num_cosine_cycles
-    training_checkpoint_freq = p27_training_checkpoint_freq
-    training_save_best = p28_training_save_best
-    training_log_freq = p29_training_log_freq
-    training_resume_from_checkpoint = p30_training_resume_from_checkpoint
-    training_resource_cpu = p31_training_resource_cpu
-    training_resource_gpu = p32_training_resource_gpu
-    training_resource_memory = p33_training_resource_memory
-    job_envs = p34_job_envs
-    training_runtime = p35_job_runtime
-    packages_to_install = p36_packages_to_install
-    pip_index_urls = p37_pip_index_urls
-    evaluation_dataset_uri = p38_evaluation_dataset_uri
-    evaluation_max_samples = p39_evaluation_max_samples
-    evaluation_max_tokens = p40_evaluation_max_tokens
-    evaluation_temperature = p41_evaluation_temperature
-    num_speculative_tokens = p42_evaluation_num_speculative_tokens
-    gpu_memory_utilization = p43_evaluation_gpu_memory_utilization
-    evaluation_startup_timeout_seconds = p44_evaluation_startup_timeout_seconds
-    evaluation_sample_seed = p45_evaluation_sample_seed
-    model_registry_address = p46_model_registry_address
-    model_registry_port = p47_model_registry_port
-    model_registry_name = p48_model_registry_name
-    model_registry_version = p49_model_registry_version
-    serving_namespace = p50_serving_namespace
+    evaluation_dataset_uri = p05_evaluation_dataset_uri
+    serving_namespace = p06_serving_namespace
+    data_extraction_max_samples = p07_data_extraction_max_samples
+    data_extraction_regenerate_responses = p08_data_extraction_regenerate_responses
+    data_extraction_concurrency = p09_data_extraction_concurrency
+    output_dir = p10_output_dir
+    hidden_states_path = p11_hidden_states_path
+    training_data_path = p12_training_data_path
+    total_seq_len = p13_total_seq_len
+    speculator_type = p14_speculator_type
+    target_layer_ids = p15_target_layer_ids
+    training_epochs = p16_training_epochs
+    training_lr = p17_training_lr
+    training_draft_vocab_size = p18_training_draft_vocab_size
+    training_num_layers = p19_training_num_layers
+    training_ttt_steps = p20_training_test_time_steps
+    training_norm_before_residual = p21_training_norm_before_residual
+    training_norm_before_fc = p22_training_norm_before_fc
+    training_embed_requires_grad = p23_training_embed_requires_grad
+    training_hidden_states_dtype = p24_training_hidden_states_dtype
+    training_scheduler_type = p25_training_scheduler_type
+    training_scheduler_warmup_steps = p26_training_scheduler_warmup_steps
+    training_scheduler_total_steps = p27_training_scheduler_total_steps
+    training_scheduler_num_cosine_cycles = p28_training_scheduler_num_cosine_cycles
+    training_checkpoint_freq = p29_training_checkpoint_freq
+    training_save_best = p30_training_save_best
+    training_log_freq = p31_training_log_freq
+    training_resume_from_checkpoint = p32_training_resume_from_checkpoint
+    training_resource_cpu = p33_training_resource_cpu
+    training_resource_gpu = p34_training_resource_gpu
+    training_resource_memory = p35_training_resource_memory
+    job_envs = p36_job_envs
+    training_runtime = p37_job_runtime
+    packages_to_install = p38_packages_to_install
+    pip_index_urls = p39_pip_index_urls
+    evaluation_max_samples = p40_evaluation_max_samples
+    evaluation_max_tokens = p41_evaluation_max_tokens
+    evaluation_temperature = p42_evaluation_temperature
+    num_speculative_tokens = p43_evaluation_num_speculative_tokens
+    gpu_memory_utilization = p44_evaluation_gpu_memory_utilization
+    evaluation_startup_timeout_seconds = p45_evaluation_startup_timeout_seconds
+    evaluation_sample_seed = p46_evaluation_sample_seed
+    model_registry_address = p47_model_registry_address
+    model_registry_port = p48_model_registry_port
+    model_registry_name = p49_model_registry_name
+    model_registry_version = p50_model_registry_version
     serving_endpoint_name = p51_serving_endpoint_name
     serving_runtime_image = p52_serving_runtime_image
 
