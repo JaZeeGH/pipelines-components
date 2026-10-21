@@ -47,8 +47,8 @@ In the RHOAI dashboard, open **AI Hub > Models > Model registries** and create o
 ``http://registry-service.registry-namespace.svc:8080/api/model_registry/v1alpha3``, use ``registry-service.registry-namespace.svc`` and ``8080``. Set a unique model name in ``p49_model_registry_name`` and use a new ``p50_model_registry_version`` for each revision.
 
 Serving creates a cluster-local KServe InferenceService using the verifier at ``p02_verifier_model_pvc`` and the draft at ``final_model``. ``p06_serving_namespace`` must access the PVC; the pipeline ServiceAccount needs permission to manage the ServingRuntime and InferenceService and read the
-predictor Deployment. ``p51_serving_endpoint_name`` must be DNS-compatible. The pinned compatible vLLM CUDA image is the default for ``p52_serving_runtime_image``. ``p13_total_seq_len``, ``p43_evaluation_num_speculative_tokens``, and ``p44_evaluation_gpu_memory_utilization`` apply to evaluation and
-serving.
+predictor Deployment. ``p51_serving_endpoint_name`` must be DNS-compatible. The pinned compatible vLLM CUDA image is the default for ``p52_serving_runtime_image``. ``p13_total_seq_len`` applies to extraction, training, and serving. ``p43_evaluation_num_speculative_tokens`` and
+``p44_evaluation_gpu_memory_utilization`` apply to evaluation and serving.
 
 Zero-padded ``pNN_`` prefixes preserve parameter order in the KFP UI.
 
@@ -68,7 +68,7 @@ Zero-padded ``pNN_`` prefixes preserve parameter order in the KFP UI.
 | `p10_output_dir` | `str` | `speculator-output` | PVC-relative directory for extraction output, processed training data, and checkpoints. The final draft is copied to ``final_model`` at the PVC root. |
 | `p11_hidden_states_path` | `str` | `speculator-output/hidden_states` | PVC-relative hidden-state directory written by extraction and read by training. Keep this path aligned with the output directory. |
 | `p12_training_data_path` | `str` | `speculator-output` | Directory containing the processed dataset written by extraction. Keep it aligned with ``p10_output_dir`` when changing the defaults. |
-| `p13_total_seq_len` | `int` | `2048` | Positive maximum sequence length used for extraction, training, evaluation, and serving. |
+| `p13_total_seq_len` | `int` | `2048` | Positive maximum sequence length used for extraction, training, and serving. |
 | `p14_speculator_type` | `str` | `eagle3` | Draft architecture. The current Trainer and evaluator support ``eagle3``. |
 | `p15_target_layer_ids` | `str` | `""` | Four comma-separated verifier layer IDs. It defaults to empty; provide the IDs for the selected verifier. |
 | `p16_training_epochs` | `int` | `3` | Number of training epochs. |

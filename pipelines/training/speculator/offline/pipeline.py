@@ -216,7 +216,8 @@ def speculator_offline_pipeline(
     ServingRuntime and InferenceService and read the predictor Deployment.
     ``p51_serving_endpoint_name`` must be DNS-compatible. The pinned compatible vLLM
     CUDA image is the default for ``p52_serving_runtime_image``.
-    ``p13_total_seq_len``, ``p43_evaluation_num_speculative_tokens``, and
+    ``p13_total_seq_len`` applies to extraction, training, and serving.
+    ``p43_evaluation_num_speculative_tokens`` and
     ``p44_evaluation_gpu_memory_utilization`` apply to evaluation and serving.
 
     Zero-padded ``pNN_`` prefixes preserve parameter order in the KFP UI.
@@ -245,7 +246,7 @@ def speculator_offline_pipeline(
             this path aligned with the output directory.
         p12_training_data_path: Directory containing the processed dataset written by extraction. Keep it aligned
             with ``p10_output_dir`` when changing the defaults.
-        p13_total_seq_len: Positive maximum sequence length used for extraction, training, evaluation, and serving.
+        p13_total_seq_len: Positive maximum sequence length used for extraction, training, and serving.
         p14_speculator_type: Draft architecture. The current Trainer and evaluator support ``eagle3``.
         p15_target_layer_ids: Four comma-separated verifier layer IDs. It defaults to empty; provide the IDs for the
             selected verifier.
