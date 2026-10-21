@@ -1,3 +1,4 @@
+---
 name: speculator_offline_pipeline
 description: >-
   Extract verifier hidden states for speculative decoding training with external
