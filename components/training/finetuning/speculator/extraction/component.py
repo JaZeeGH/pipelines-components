@@ -8,6 +8,31 @@ from kfp import dsl
 _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
 
 
+def _resolve_verifier_model_pvc_uri(verifier_model_pvc: str, persistent_pvc: str) -> str:
+    """Normalize a verifier directory to a URI for an external vLLM Trainer job."""
+    verifier_model_pvc = verifier_model_pvc.strip()
+    if not verifier_model_pvc:
+        raise ValueError("verifier_model_pvc is required when vllm_source='remote'")
+    if not persistent_pvc:
+        raise ValueError("persistent_pvc is required when vllm_source='remote'")
+
+    if verifier_model_pvc.startswith("pvc://"):
+        claim, separator, path = verifier_model_pvc.removeprefix("pvc://").partition("/")
+        if not separator or not path:
+            raise ValueError("Verifier PVC URIs must use pvc://<claim>/<path>")
+        if claim != persistent_pvc:
+            raise ValueError(f"Verifier PVC URI must reference persistent_pvc {persistent_pvc!r}")
+    else:
+        path = verifier_model_pvc
+
+    path_parts = path.strip("/").split("/")
+    if path.startswith("/") or any(part in {"", ".", ".."} for part in path_parts):
+        raise ValueError("verifier_model_pvc must be a relative PVC path without traversal")
+
+    relative_path = "/".join(path_parts)
+    return f"pvc://{persistent_pvc}/{relative_path}"
+
+
 @dsl.component(
     base_image=(
         "quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@"
@@ -16,6 +41,7 @@ _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
     packages_to_install=["kfp==2.17.0", "kubernetes", "olot"],
     install_kfp_package=False,
     embedded_artifact_path=_SHARED_DIR,
+    additional_funcs=[_resolve_verifier_model_pvc_uri],
     task_config_passthroughs=[
         dsl.TaskConfigField.RESOURCES,
         dsl.TaskConfigField.KUBERNETES_TOLERATIONS,
@@ -68,8 +94,17 @@ def extract_speculator(
     """
     from speculator import run_speculator
 
+    vllm_source = vllm_source.strip().lower()
+    if vllm_source not in {"managed", "remote"}:
+        raise ValueError("vllm_source must be either 'managed' or 'remote'")
+    vllm_endpoint = (vllm_endpoint or "").strip()
     if vllm_source == "remote":
-        verifier_model = verifier_model_pvc or verifier_model
+        if not vllm_endpoint:
+            raise ValueError("vllm_endpoint is required when vllm_source='remote'")
+        verifier_model_pvc = _resolve_verifier_model_pvc_uri(verifier_model_pvc or verifier_model, persistent_pvc)
+        verifier_model = verifier_model_pvc
+    elif vllm_endpoint:
+        raise ValueError("vllm_endpoint must be blank when vllm_source='managed'")
     if not vllm_endpoint:
         vllm_endpoint = None
     if dataset_download_enabled:

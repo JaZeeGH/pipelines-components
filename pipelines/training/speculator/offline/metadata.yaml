@@ -1,6 +1,6 @@
 name: speculator_offline_pipeline
 description: >-
-  Extract verifier hidden states for speculative decoding training with managed
+  Extract verifier hidden states for speculative decoding training with external
   vLLM, train and evaluate the draft, optionally register it, then serve it.
 stability: alpha
 dependencies:
