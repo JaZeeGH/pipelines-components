@@ -102,8 +102,8 @@ def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_p
     pipeline_inputs = pipeline_spec["root"]["inputDefinitions"]["parameters"]
     assert list(pipeline_inputs) == PUBLIC_INPUTS
     tasks = pipeline_spec["root"]["dag"]["tasks"]
-    assert tasks["train-speculator-mode"]["taskInfo"]["name"] == "speculator-training-mode"
-    assert tasks["evaluate-speculator"]["taskInfo"]["name"] == "evaluate-draft-model"
+    assert tasks["train-speculator-mode"]["taskInfo"]["name"] == "train-speculator-mode"
+    assert tasks["evaluate-speculator"]["taskInfo"]["name"] == "evaluate-speculator"
     assert tasks["evaluate-speculator"]["cachingOptions"].get("enableCache", False) is False
     assert "model-registry==0.3.9" in compiled_pipeline
     assert "model-registry==0.3.4" not in compiled_pipeline
