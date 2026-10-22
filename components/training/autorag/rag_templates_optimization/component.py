@@ -220,6 +220,9 @@ def rag_templates_optimization(
 
             pattern_data = pattern.get("payload")
             settings = pattern_data["settings"]
+            # Retry with excerpts after a context-window overflow so a large
+            # retrieval result does not make the deployed agent unusable.
+            settings.setdefault("agentic", {})["enable_context_compression"] = True
             store_binding = settings["store_binding"]
             is_graph_pattern = store_binding["provider_type"] == "neo4j"
             if indexing_pipeline_params:

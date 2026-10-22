@@ -54,8 +54,8 @@ botocore==1.43.114 \
     # via
     #   boto3
     #   s3transfer
-cachetools==7.2.2 \
-    --hash=sha256:c71c4aaf281b4796adc7233cffc4782bb1ba234fe3ac592715bbd41180c3171e
+cachetools==7.2.3 \
+    --hash=sha256:08257b7031acd955acfd147b453c26c14ec7880e74e1b44352d0db9d831e779a
     # via pymilvus
 certifi==2026.7.22 \
     --hash=sha256:e5fe15bb588e1de8f8caef013fbcf10c5e61c7f2a96ecba518df6c4d9acbdd7b
@@ -107,8 +107,8 @@ distro==1.9.0 \
 doclang==0.7.3 \
     --hash=sha256:a56a9bfed43292ff9e7148d13d62f635039648acef3cb1cb46d59a91d502c2a5
     # via docling-core
-docling-core==2.101.1 \
-    --hash=sha256:2980a34641f867e10a92b70aa58d53f2671b48100b36858471b1ed97316b1340
+docling-core==2.102.0 \
+    --hash=sha256:733814f7104dea1f403aa9ad42e0d7841e780e5ee612b47f7776f9e860ebccbc
     # via docling-slim
 docling-slim==2.121.0 \
     --hash=sha256:284e9f76765a61eede0b280d182cd2755ffd4af646766483cf2dfa4be4ec1490
@@ -125,8 +125,8 @@ faiss-cpu==1.12.0 \
     --hash=sha256:7490104b1ee98f85e199ff664454fca13d187f27e62820cb51962737c686ae21 \
     --hash=sha256:fc81bc35bb075adb2de9b45fa5052413c1c3e7c0f223912a89e6d91ec1f5a44c
     # via milvus-lite
-filelock==4.2.0 \
-    --hash=sha256:8fd3636cd39bfa2c72c5b22120057ede006f92fbf3f48ea06c58ce75f9bc5d30
+filelock==4.2.1 \
+    --hash=sha256:c2776aa3c936b9f0e9e2997c1fa27b66b582f81dc2d22993f633b53950619fe6
     # via
     #   datasets
     #   huggingface-hub
@@ -243,8 +243,8 @@ jsonschema==4.26.0 \
 jsonschema-specifications==2025.9.1 \
     --hash=sha256:b7e8d9e31ac4eb1d0534fc8f53ea4688bee48820dfc9d07b7ad71ef0c274cfae
     # via jsonschema
-langchain==1.4.5 \
-    --hash=sha256:9bf0c192e349bcb074528e66c7b3f1f22cad5b70a7fc7c163ec4d41fc4f80689
+langchain==1.4.6 \
+    --hash=sha256:fa4eae3b763eeadf50a7dda8bc8eacf3bbaaf40fe67a2252af2ed0aab7d07c38
     # via
     #   ai4rag
     #   ragas
@@ -256,8 +256,8 @@ langchain-community==0.4.1 \
     # via
     #   ai4rag
     #   ragas
-langchain-core==1.6.11 \
-    --hash=sha256:8529c9bd6dc8457a6fcc006544fe3f23c7ea7f7a4ef2f59e0ee0629b39de14d1
+langchain-core==1.6.12 \
+    --hash=sha256:d33b5e22cb70a48d5d4e1b54fcd39c1295fd4d00c187e95b8711f6569191436f
     # via
     #   langchain
     #   langchain-classic
@@ -269,8 +269,8 @@ langchain-core==1.6.11 \
     #   langgraph-prebuilt
     #   langgraph-sdk
     #   ragas
-langchain-openai==1.7.1 \
-    --hash=sha256:dceccf605378bff8c0e9c9fa61fd9535bac14e406cdb913f65122241707453f2
+langchain-openai==1.7.2 \
+    --hash=sha256:e126f23dff8632a91bd877558746925673a5b072fbb5b5cefe93a54ac6ffaabb
     # via
     #   ai4rag
     #   ragas
@@ -284,22 +284,22 @@ langchain-text-splitters==1.1.3 \
     # via
     #   ai4rag
     #   langchain-classic
-langgraph==1.2.15 \
-    --hash=sha256:9ea4bed5e32739e0b881eca6280305c225e1356fa5a968cd3d7118611e714574
+langgraph==1.2.16 \
+    --hash=sha256:1546c50a6572a31a2fdcd9639a4bc2e3fa9a98ebaca6b34f5041f844e3bea6fe
     # via langchain
 langgraph-checkpoint==4.3.0 \
     --hash=sha256:1ca00a3a35c7d38ccd476d4ba415410910376270eee527965309dfba5084e42d
     # via
     #   langgraph
     #   langgraph-prebuilt
-langgraph-prebuilt==1.1.0 \
-    --hash=sha256:aa52e1c5c2d317643260bffabbf2d91312a04b9d545230b2ad43cc1b7de1f128
+langgraph-prebuilt==1.1.1 \
+    --hash=sha256:dde7e193ff2944ccbeee688773afceb9b9a092b3183c9a49609ad51163ee0b1c
     # via langgraph
-langgraph-sdk==0.4.7 \
-    --hash=sha256:73027339d10159a5a213193396912322aff44098ecf64cede9cf6ead498455b7
+langgraph-sdk==0.4.8 \
+    --hash=sha256:7064c915ad18ab682de9e4c0e2ac92f245d7c0a9fbfa22e31d89b7471c5c3468
     # via langgraph
-langsmith==0.14.9 \
-    --hash=sha256:3fdbc5f5775dad5b1926582ad775917a0c0d6f073ee764bddb26cb0cefb3a927
+langsmith==0.14.11 \
+    --hash=sha256:d4110cd69cce5256fbb613c1d02a2ada7fd9d1f3892fc75c684a1d3c06499968
     # via
     #   langchain-classic
     #   langchain-community
@@ -514,8 +514,8 @@ pygments==2.21.0 \
 pymilvus==3.0.2 \
     --hash=sha256:a8baae29646e0b6cafa11509b6288e79b0a15584315121f860e42b04d57e0fe5
     # via ai4rag
-pypdf==6.20.1 \
-    --hash=sha256:40cf77a2f0c4c825ee43050eff8e82261ab13dfcd29a35326811a550be95613e
+pypdf==6.21.1 \
+    --hash=sha256:ed0be56f840c85ef16a3873e57c6f9ca8b7b397913716d1d47ef3f68c096e48e
     # via neo4j-graphrag
 python-dateutil==2.9.0.post0 \
     --hash=sha256:21ac874bb106a90ff80ef341dd135141d989618b441d0e51a82f32fb075b6b4c
@@ -642,11 +642,10 @@ sniffio==1.3.1 \
     # via
     #   langsmith
     #   openai
-sqlalchemy==2.1.4 \
-    --hash=sha256:665648cb1fcb0ac3a50c7d4b3a02f05b88cb53bcd19221cc5317b0c290ee3ac9 \
-    --hash=sha256:8a2b1c36c5aca800441fec3f37677b5cca43130c1578bbf0d7850a20d1944fb1 \
-    --hash=sha256:c41cea031e8a24d1e8e16a593cce44b7b456e60cb62fe452a0ce62c6640e2fd3 \
-    --hash=sha256:ceaecc0e45b958dba92fe0e481dcea0fd4449d6291d7b95e02b8f0fcf2d3ecc8
+sqlalchemy==2.1.5 \
+    --hash=sha256:4a28924bdc41bc57dd1b24a0008a237c92f6f5ec22118bf62256826a48f3fe3a \
+    --hash=sha256:56a81481ed05256120e1dfb42e26c706ede3e754c3d01489507fb803cd8f90e9 \
+    --hash=sha256:616b66494ecc90028e46121ea5ac60e536c7b36763ae09ecfe5fb4b46a6baa5a
     # via
     #   langchain-classic
     #   langchain-community
@@ -689,8 +688,8 @@ tqdm==4.70.1 \
     #   ragas
     #   semchunk
     #   transformers
-transformers==5.20.0 \
-    --hash=sha256:70c0964ed3a9036277bc6e7be9dc6c3faaaf6bd893937c8fbf9a53f61d1413c3
+transformers==5.20.1 \
+    --hash=sha256:c96e641841ff96e3920b37185ffeba7db0703b24f7a6cfb08d2c90ea7b00fbb4
     # via docling-core
 tree-sitter==0.26.0 \
     --hash=sha256:0d5e2705f562bdb9c85a8ec74876ed9d3575e170ee6bdc07900acae192714644 \
