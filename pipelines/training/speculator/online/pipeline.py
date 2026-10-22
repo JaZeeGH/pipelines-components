@@ -8,7 +8,7 @@ from components.data_processing.download_model import download_model as download
 from components.deployment.kubeflow_model_registry import kubeflow_model_registry
 from components.deployment.speculative_decoding_serving import speculative_decoding_serving
 from components.evaluation.speculator import evaluate_draft_model
-from components.training.finetuning.speculator import online_speculator
+from components.training.finetuning.speculator import online_draft_model_training
 
 PVC_SIZE = "200Gi"
 PVC_STORAGE_CLASS = "nfs-csi"
@@ -360,6 +360,7 @@ def speculator_online_pipeline(
         model_cache_mount="/mnt/persistent/models",
         download_enabled=download_model,
         existing_model_path=verifier_model_pvc,
+        output_prefix="models",
     )
     download_task.set_caching_options(False)
     kfp.kubernetes.use_secret_as_env(
@@ -374,7 +375,7 @@ def speculator_online_pipeline(
         mount_path="/mnt/persistent",
     )
 
-    online_task = online_speculator(
+    online_task = online_draft_model_training(
         verifier_model=verifier_model,
         verifier_model_pvc=verifier_model_pvc,
         download_model=download_model,

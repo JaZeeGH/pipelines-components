@@ -10,8 +10,8 @@ _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
 
 @dsl.component(
     base_image=(
-        "registry.redhat.io/rhoai/odh-th-torch-cuda-py312-rhel9@"
-        "sha256:edd92fa1b4759ad93ef3e93d221a9817e0582ed9391d56763f9e30e619679e31"
+        "quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@"
+        "sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b"
     ),
     packages_to_install=["kfp==2.17.0", "kubernetes", "olot"],
     install_kfp_package=False,
@@ -25,7 +25,7 @@ _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
         dsl.TaskConfigPassthrough(field=dsl.TaskConfigField.KUBERNETES_VOLUMES, apply_to_task=True),
     ],
 )
-def online_speculator(
+def online_draft_model_training(
     verifier_model: str,
     output_dir: str,
     pvc_path: str,

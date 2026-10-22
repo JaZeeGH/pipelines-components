@@ -26,6 +26,7 @@ def test_component_signature():
         "model_cache_mount",
         "download_enabled",
         "existing_model_path",
+        "output_prefix",
     }
 
 
@@ -35,6 +36,7 @@ def _run_download(
     pre_cached=False,
     download_enabled=True,
     existing_model_path="",
+    output_prefix="",
 ):
     """Invoke download_model.python_func with huggingface_hub mocked via sys.modules."""
     model_dir_name = model_name.replace("/", "--")
@@ -59,6 +61,7 @@ def _run_download(
             model_cache_mount=str(tmp_path),
             download_enabled=download_enabled,
             existing_model_path=existing_model_path,
+            output_prefix=output_prefix,
         )
 
     return result, mock_hf, model_path
@@ -103,6 +106,18 @@ def test_download_can_be_disabled(tmp_path):
     assert result == "mistralai--Mistral-7B"
     mock_hf.snapshot_download.assert_not_called()
     assert not model_path.exists()
+
+
+def test_output_prefix_prepended_on_download(tmp_path):
+    """Verify output_prefix is prepended to the model directory name."""
+    result, _, _ = _run_download(tmp_path, output_prefix="models")
+    assert result == "models/mistralai--Mistral-7B"
+
+
+def test_output_prefix_empty_returns_dir_name(tmp_path):
+    """Verify empty output_prefix returns just the directory name."""
+    result, _, _ = _run_download(tmp_path, output_prefix="")
+    assert result == "mistralai--Mistral-7B"
 
 
 def test_disabled_download_returns_existing_model_path(tmp_path):

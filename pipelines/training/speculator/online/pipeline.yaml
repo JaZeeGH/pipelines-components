@@ -1,0 +1,2279 @@
+# PIPELINE DEFINITION
+# Name: speculator-online-pipeline
+# Description: Cache a verifier on a shared PVC, train an Eagle3 draft in one online Speculator Trainer job with a managed vLLM sidecar, evaluate it, optionally register it, and serve it.
+# Inputs:
+#    p01_persistent_pvc: str
+#    p02_verifier_model: str [Default: '']
+#    p03_verifier_model_pvc: str [Default: '']
+#    p04_download_model: bool [Default: False]
+#    p05_target_layer_ids: str
+#    p06_dataset_name: str
+#    p07_evaluation_dataset_uri: str
+#    p08_serving_namespace: str
+#    p09_data_extraction_max_samples: int [Default: 0.0]
+#    p10_data_extraction_regenerate_responses: bool [Default: False]
+#    p11_data_extraction_concurrency: int [Default: 1.0]
+#    p12_output_dir: str [Default: 'speculator-output']
+#    p13_total_seq_len: int [Default: 2048.0]
+#    p14_training_epochs: int [Default: 3.0]
+#    p15_training_lr: float [Default: 0.0001]
+#    p16_training_draft_vocab_size: int [Default: 0.0]
+#    p17_training_num_layers: int [Default: 1.0]
+#    p18_training_test_time_steps: int [Default: 1.0]
+#    p19_training_norm_before_residual: bool [Default: True]
+#    p20_training_norm_before_fc: bool [Default: False]
+#    p21_training_embed_requires_grad: bool [Default: False]
+#    p22_training_hidden_states_dtype: str [Default: 'bfloat16']
+#    p23_training_scheduler_type: str [Default: 'linear']
+#    p24_training_scheduler_warmup_steps: int [Default: 0.0]
+#    p25_training_scheduler_total_steps: int [Default: 0.0]
+#    p26_training_save_best: bool [Default: False]
+#    p27_training_resume_from_checkpoint: bool [Default: False]
+#    p28_training_resource_cpu: str [Default: '4']
+#    p29_training_resource_gpu: int [Default: 1.0]
+#    p30_training_resource_memory: str [Default: '64Gi']
+#    p31_vllm_resource_memory: str [Default: '96Gi']
+#    p32_vllm_gpu_memory_utilization: float [Default: 0.9]
+#    p33_vllm_readiness_timeout_minutes: int [Default: 60.0]
+#    p34_job_runtime: str [Default: 'vllm-extract-cuda']
+#    p35_packages_to_install: str [Default: '']
+#    p36_job_envs: str [Default: 'NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1']
+#    p37_evaluation_max_samples: int [Default: 80.0]
+#    p38_evaluation_max_tokens: int [Default: 256.0]
+#    p39_evaluation_temperature: float [Default: 0.0]
+#    p40_evaluation_num_speculative_tokens: int [Default: 5.0]
+#    p41_evaluation_gpu_memory_utilization: float [Default: 0.9]
+#    p42_evaluation_startup_timeout_seconds: int [Default: 900.0]
+#    p43_model_registry_address: str [Default: '']
+#    p44_model_registry_port: int [Default: 8080.0]
+#    p45_model_registry_name: str [Default: 'speculator-online-draft']
+#    p46_model_registry_version: str [Default: '1.0.0']
+#    p47_serving_endpoint_name: str [Default: 'speculator-online']
+#    p48_serving_runtime_image: str [Default: 'registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a']
+components:
+  comp-download-model:
+    executorLabel: exec-download-model
+    inputDefinitions:
+      parameters:
+        download_enabled:
+          defaultValue: true
+          description: If False, return the expected model directory without downloading.
+          isOptional: true
+          parameterType: BOOLEAN
+        existing_model_path:
+          defaultValue: ''
+          description: Existing PVC-relative path or pvc:// URI returned when downloads
+            are disabled.
+          isOptional: true
+          parameterType: STRING
+        model_cache_mount:
+          defaultValue: /mnt/models
+          description: Mount path for the model cache PVC.
+          isOptional: true
+          parameterType: STRING
+        model_cache_pvc:
+          description: Name of the PVC to store models (unused here, mounted via pipeline).
+          parameterType: STRING
+        model_name:
+          description: HuggingFace model ID (e.g. 'mistralai/Mistral-7B-Instruct-v0.3').
+          parameterType: STRING
+        output_prefix:
+          defaultValue: ''
+          description: Optional prefix prepended to the derived model directory name
+            in return values.
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-evaluate-draft-model:
+    executorLabel: exec-evaluate-draft-model
+    inputDefinitions:
+      parameters:
+        draft_model_path:
+          description: Draft directory under the model mount, optionally using pvc://<claim>/<path>
+            syntax.
+          parameterType: STRING
+        evaluation_dataset_mount_path:
+          defaultValue: /mnt/persistent
+          description: Root directory for local datasets; resolved paths must stay
+            inside it.
+          isOptional: true
+          parameterType: STRING
+        evaluation_dataset_pvc:
+          defaultValue: ''
+          description: 'Mounted PVC claim name. Every ``pvc://`` URI must use this
+            exact
+
+            claim name; relative paths need no PVC prefix.'
+          isOptional: true
+          parameterType: STRING
+        evaluation_dataset_uri:
+          description: 'Hugging Face dataset ID, relative path under the dataset mount,
+            or
+
+            ``pvc://<claim>/<path>``.'
+          parameterType: STRING
+        evaluation_gpu_memory_utilization:
+          defaultValue: 0.9
+          description: vLLM GPU memory utilization fraction.
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        evaluation_max_samples:
+          defaultValue: 80.0
+          description: Maximum GuideLLM requests at each sweep point.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_max_tokens:
+          defaultValue: 256.0
+          description: Maximum generation tokens for each request.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_model_mount_path:
+          defaultValue: /mnt/persistent
+          description: Root directory for verifier and draft models; resolved paths
+            must stay inside it.
+          isOptional: true
+          parameterType: STRING
+        evaluation_num_speculative_tokens:
+          defaultValue: 5.0
+          description: Number of draft tokens proposed by vLLM.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_port:
+          defaultValue: 8000.0
+          description: Local port for the temporary vLLM endpoint.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_sample_seed:
+          defaultValue: 42.0
+          description: Seed used when sampling a local JSONL dataset.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_speculator_type:
+          description: Speculator method configured on the vLLM server.
+          parameterType: STRING
+        evaluation_startup_timeout_seconds:
+          defaultValue: 900.0
+          description: Maximum wait for the vLLM health endpoint.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        evaluation_temperature:
+          defaultValue: 0.0
+          description: Sampling temperature passed through to GuideLLM.
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        evaluation_timeout_seconds:
+          defaultValue: 7200.0
+          description: Maximum time allowed for the upstream evaluation sweep.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        verifier_model:
+          description: Verifier directory under the model mount, optionally using
+            pvc://<claim>/<path> syntax.
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        output_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        output_results:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-kubeflow-model-registry:
+    executorLabel: exec-kubeflow-model-registry
+    inputDefinitions:
+      artifacts:
+        eval_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Evaluation metrics from lm-eval.
+          isOptional: true
+        eval_results:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+          description: Full evaluation results JSON artifact.
+          isOptional: true
+        input_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+          description: Training metrics.
+          isOptional: true
+        input_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+          description: Model artifact from training step.
+          isOptional: true
+      parameters:
+        author:
+          defaultValue: pipeline
+          description: Author name for the model registration.
+          isOptional: true
+          parameterType: STRING
+        model_description:
+          defaultValue: ''
+          description: Optional description for the model.
+          isOptional: true
+          parameterType: STRING
+        model_format_name:
+          defaultValue: pytorch
+          description: Model format name (e.g. "pytorch", "onnx").
+          isOptional: true
+          parameterType: STRING
+        model_format_version:
+          defaultValue: '1.0'
+          description: Model format version.
+          isOptional: true
+          parameterType: STRING
+        model_name:
+          defaultValue: fine-tuned-model
+          description: Name for the registered model.
+          isOptional: true
+          parameterType: STRING
+        model_pvc_name:
+          defaultValue: ''
+          description: Name of the persistent PVC containing the model.
+          isOptional: true
+          parameterType: STRING
+        model_version:
+          defaultValue: 1.0.0
+          description: Version string for the model (e.g. "1.0.0").
+          isOptional: true
+          parameterType: STRING
+        pvc_mount_path:
+          description: PVC mount path for workspace storage.
+          parameterType: STRING
+        registry_address:
+          defaultValue: ''
+          description: Model Registry server address (hostname or IP).
+          isOptional: true
+          parameterType: STRING
+        registry_port:
+          defaultValue: 8080.0
+          description: 'Model Registry server port (default: 8080).'
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        shared_log_file:
+          defaultValue: pipeline_log.txt
+          description: Filename for shared pipeline log.
+          isOptional: true
+          parameterType: STRING
+        source_namespace:
+          defaultValue: ''
+          description: Namespace where pipeline runs (auto-detected if empty).
+          isOptional: true
+          parameterType: STRING
+        source_pipeline_name:
+          defaultValue: ''
+          description: Name of the source KFP pipeline.
+          isOptional: true
+          parameterType: STRING
+        source_pipeline_run_id:
+          defaultValue: ''
+          description: Unique ID of the pipeline run.
+          isOptional: true
+          parameterType: STRING
+        source_pipeline_run_name:
+          defaultValue: ''
+          description: Display name of the pipeline run.
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-online-draft-model-training:
+    executorLabel: exec-online-draft-model-training
+    inputDefinitions:
+      parameters:
+        data_extraction_concurrency:
+          defaultValue: 4.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        data_extraction_max_samples:
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        data_extraction_regenerate_responses:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        dataset_name:
+          parameterType: STRING
+        download_model:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        enable_progression_tracking:
+          defaultValue: true
+          isOptional: true
+          parameterType: BOOLEAN
+        kubernetes_config:
+          isOptional: true
+          parameterType: TASK_CONFIG
+        metrics_poll_interval_seconds:
+          defaultValue: 30.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        metrics_port:
+          defaultValue: 28080.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        output_dir:
+          parameterType: STRING
+        packages_to_install:
+          isOptional: true
+          parameterType: STRING
+        persistent_mount_path:
+          defaultValue: /mnt/persistent
+          isOptional: true
+          parameterType: STRING
+        persistent_pvc:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        pip_index_urls:
+          isOptional: true
+          parameterType: STRING
+        pvc_path:
+          parameterType: STRING
+        speculator_type:
+          defaultValue: eagle3
+          isOptional: true
+          parameterType: STRING
+        target_layer_ids:
+          isOptional: true
+          parameterType: STRING
+        total_seq_len:
+          defaultValue: 2048.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_checkpoint_freq:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        training_draft_vocab_size:
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_embed_requires_grad:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        training_envs:
+          defaultValue: ''
+          isOptional: true
+          parameterType: STRING
+        training_epochs:
+          defaultValue: 3.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_from_pretrained:
+          isOptional: true
+          parameterType: STRING
+        training_hidden_states_dtype:
+          defaultValue: bfloat16
+          isOptional: true
+          parameterType: STRING
+        training_log_freq:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_lr:
+          defaultValue: 0.0001
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        training_norm_before_fc:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        training_norm_before_residual:
+          defaultValue: true
+          isOptional: true
+          parameterType: BOOLEAN
+        training_num_layers:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_resource_cpu:
+          defaultValue: '4'
+          isOptional: true
+          parameterType: STRING
+        training_resource_gpu:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_resource_memory:
+          defaultValue: 64Gi
+          isOptional: true
+          parameterType: STRING
+        training_resume_from_checkpoint:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        training_runtime:
+          defaultValue: vllm-extract-cuda
+          isOptional: true
+          parameterType: STRING
+        training_save_best:
+          defaultValue: false
+          isOptional: true
+          parameterType: BOOLEAN
+        training_scheduler_num_cosine_cycles:
+          defaultValue: 0.5
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        training_scheduler_total_steps:
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_scheduler_type:
+          defaultValue: linear
+          isOptional: true
+          parameterType: STRING
+        training_scheduler_warmup_steps:
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        training_ttt_steps:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        verifier_model:
+          parameterType: STRING
+        verifier_model_pvc:
+          isOptional: true
+          parameterType: STRING
+        vllm_gpu_memory_utilization:
+          defaultValue: 0.9
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        vllm_readiness_timeout_minutes:
+          defaultValue: 60.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        vllm_resource_gpu:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        vllm_resource_memory:
+          defaultValue: 96Gi
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        output_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        output_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+    taskConfigPassthroughs:
+    - field: RESOURCES
+    - field: KUBERNETES_TOLERATIONS
+    - field: KUBERNETES_NODE_SELECTOR
+    - field: KUBERNETES_AFFINITY
+    - applyToTask: true
+      field: ENV
+    - applyToTask: true
+      field: KUBERNETES_VOLUMES
+  comp-speculative-decoding-serving:
+    executorLabel: exec-speculative-decoding-serving
+    inputDefinitions:
+      parameters:
+        cpu_limits:
+          defaultValue: '2'
+          description: Predictor CPU limit.
+          isOptional: true
+          parameterType: STRING
+        cpu_requests:
+          defaultValue: '2'
+          description: Predictor CPU request.
+          isOptional: true
+          parameterType: STRING
+        draft_model_dir:
+          description: Draft directory relative to the PVC root or a matching ``pvc://``
+            URI.
+          parameterType: STRING
+        draft_tensor_parallel_size:
+          defaultValue: 1.0
+          description: vLLM tensor parallel size for the draft model.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        enable_auth:
+          defaultValue: false
+          description: Enable RHOAI authentication for the exposed endpoint.
+          isOptional: true
+          parameterType: BOOLEAN
+        enable_external_route:
+          defaultValue: false
+          description: 'Request external visibility and wait for the
+
+            platform-managed OpenShift Route to be admitted with the requested
+
+            authentication settings. No Route write permissions are needed. When
+
+            ``False`` (the default), request cluster-local visibility and return
+
+            the internal cluster URL.'
+          isOptional: true
+          parameterType: BOOLEAN
+        endpoint_name:
+          description: DNS-compatible InferenceService name.
+          parameterType: STRING
+        gpu_count:
+          defaultValue: 1.0
+          description: GPUs per predictor; also used as verifier vLLM tensor parallel
+            size.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        gpu_memory_utilization:
+          defaultValue: 0.9
+          description: Fraction of GPU memory available to vLLM.
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        hardware_profile_name:
+          defaultValue: gpu-profile
+          description: 'Existing RHOAI HardwareProfile name in
+
+            ``redhat-ods-applications``, or empty to skip lookup and remove an old
+
+            profile reference. A missing requested profile is an error.'
+          isOptional: true
+          parameterType: STRING
+        max_model_len:
+          defaultValue: 4096.0
+          description: Maximum verifier context length.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        max_num_seqs:
+          defaultValue: 16.0
+          description: Maximum concurrent sequences in the vLLM scheduler.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        max_replicas:
+          defaultValue: 1.0
+          description: Maximum number of predictor replicas.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        memory_limits:
+          defaultValue: 8Gi
+          description: Predictor memory limit.
+          isOptional: true
+          parameterType: STRING
+        memory_requests:
+          defaultValue: 8Gi
+          description: Predictor memory request.
+          isOptional: true
+          parameterType: STRING
+        min_replicas:
+          defaultValue: 1.0
+          description: Minimum number of predictor replicas.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        model_cache_pvc:
+          description: PVC containing both model directories.
+          parameterType: STRING
+        namespace:
+          description: Namespace in which to create the KServe resources.
+          parameterType: STRING
+        num_speculative_tokens:
+          defaultValue: 3.0
+          description: Number of draft tokens proposed per step.
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        runtime_image:
+          defaultValue: registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a
+          description: vLLM CUDA image supporting Eagle3 speculative decoding.
+          isOptional: true
+          parameterType: STRING
+        trust_remote_code:
+          defaultValue: false
+          description: Pass ``--trust-remote-code`` for the draft checkpoint.
+          isOptional: true
+          parameterType: BOOLEAN
+        verifier_model_dir:
+          description: Verifier directory relative to the PVC root or a matching ``pvc://``
+            URI.
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-download-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - download_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'huggingface_hub>=0.20.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef download_model(\n    model_name: str,\n    model_cache_pvc: str,\n\
+          \    model_cache_mount: str = \"/mnt/models\",\n    download_enabled: bool\
+          \ = True,\n    existing_model_path: str = \"\",\n    output_prefix: str\
+          \ = \"\",\n) -> str:\n    \"\"\"Download a HuggingFace model to a PVC for\
+          \ caching.\n\n    If the model is already present on the PVC, skips the\
+          \ download.\n\n    Args:\n        model_name: HuggingFace model ID (e.g.\
+          \ 'mistralai/Mistral-7B-Instruct-v0.3').\n        model_cache_pvc: Name\
+          \ of the PVC to store models (unused here, mounted via pipeline).\n    \
+          \    model_cache_mount: Mount path for the model cache PVC.\n        download_enabled:\
+          \ If False, return the expected model directory without downloading.\n \
+          \       existing_model_path: Existing PVC-relative path or pvc:// URI returned\
+          \ when downloads are disabled.\n        output_prefix: Optional prefix prepended\
+          \ to the derived model directory name in return values.\n\n    Returns:\n\
+          \        The PVC sub-path where the model is stored.\n    \"\"\"\n    import\
+          \ os\n\n    from huggingface_hub import snapshot_download\n\n    model_dir_name\
+          \ = model_name.replace(\"/\", \"--\")\n    model_path = os.path.join(model_cache_mount,\
+          \ model_dir_name)\n    if not download_enabled:\n        if existing_model_path.strip():\n\
+          \            print(f\"Model download disabled; using existing model path\
+          \ {existing_model_path}.\")\n            return existing_model_path.strip()\n\
+          \        print(f\"Model download disabled; expected model path is {model_path}.\"\
+          )\n        return f\"{output_prefix}/{model_dir_name}\".strip(\"/\")\n \
+          \   sentinel = os.path.join(model_path, \".download_complete\")\n\n    if\
+          \ os.path.exists(sentinel):\n        file_count = sum(1 for _ in os.scandir(model_path)\
+          \ if _.is_file())\n        print(f\"Model '{model_name}' already cached\
+          \ at {model_path} ({file_count} files). Skipping download.\")\n        return\
+          \ f\"{output_prefix}/{model_dir_name}\".strip(\"/\")\n\n    print(f\"Downloading\
+          \ model '{model_name}' to {model_path}...\")\n    snapshot_download(\n \
+          \       repo_id=model_name,\n        local_dir=model_path,\n        local_dir_use_symlinks=False,\n\
+          \    )\n\n    with open(sentinel, \"w\") as f:\n        f.write(model_name)\n\
+          \n    file_count = sum(1 for _ in os.scandir(model_path) if _.is_file())\n\
+          \    print(f\"Model '{model_name}' downloaded to {model_path} ({file_count}\
+          \ files).\")\n    return f\"{output_prefix}/{model_dir_name}\".strip(\"\
+          /\")\n\n"
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:f9844dc150592a9f196283b3645dda92bd80dfdb3d467fa8725b10267ea5bdbc
+    exec-evaluate-draft-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_draft_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ 'requests>=2.32.0' 'guidellm~=0.7.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef _resolve_evaluation_dataset_path(uri: str, mount_path: str, persistent_pvc:\
+          \ str = \"\") -> str:\n    \"\"\"Resolve a mounted-PVC path and reject traversal\
+          \ or mismatched PVC URIs.\"\"\"\n    import os\n\n    path = uri\n    if\
+          \ path.startswith(\"pvc://\"):\n        pvc_uri = path.removeprefix(\"pvc://\"\
+          )\n        pvc_name, separator, path = pvc_uri.partition(\"/\")\n      \
+          \  if not persistent_pvc:\n            raise ValueError(\"A mounted PVC\
+          \ name is required to resolve pvc:// URIs\")\n        if pvc_name != persistent_pvc:\n\
+          \            raise ValueError(f\"PVC URI references claim {pvc_name!r},\
+          \ but the mounted PVC is {persistent_pvc!r}\")\n        if not separator:\n\
+          \            path = \"\"\n\n    mount_root = os.path.realpath(mount_path)\n\
+          \    candidate = path if os.path.isabs(path) else os.path.join(mount_root,\
+          \ path)\n    resolved_path = os.path.realpath(candidate)\n    try:\n   \
+          \     common_path = os.path.commonpath((mount_root, resolved_path))\n  \
+          \  except ValueError as exc:\n        raise ValueError(f\"Path {uri!r} resolves\
+          \ outside mounted PVC {mount_root!r}\") from exc\n    if common_path !=\
+          \ mount_root:\n        raise ValueError(f\"Path {uri!r} resolves outside\
+          \ mounted PVC {mount_root!r}\")\n    return resolved_path\n\n\ndef _extract_evaluation_prompt(record:\
+          \ object) -> str:\n    \"\"\"Extract a prompt string from common JSONL chat\
+          \ record shapes.\"\"\"\n    if isinstance(record, str):\n        return\
+          \ record\n    if not isinstance(record, dict):\n        raise ValueError(f\"\
+          Unsupported evaluation record type: {type(record).__name__}\")\n\n    prompt\
+          \ = record.get(\"prompt\") or record.get(\"text\")\n    if prompt:\n   \
+          \     return str(prompt)\n\n    messages = record.get(\"messages\") or record.get(\"\
+          conversations\") or []\n    user_messages = [\n        message\n       \
+          \ for message in messages\n        if isinstance(message, dict) and message.get(\"\
+          role\", message.get(\"from\")) in (\"user\", \"human\")\n    ]\n    if user_messages:\n\
+          \        prompt = user_messages[-1].get(\"content\", user_messages[-1].get(\"\
+          value\"))\n    if not prompt:\n        raise ValueError(\"Each evaluation\
+          \ record must contain a prompt or user message\")\n    return str(prompt)\n\
+          \n\ndef _prepare_local_evaluation_dataset(\n    uri: str,\n    mount_path:\
+          \ str,\n    persistent_pvc: str,\n    max_requests: int,\n    sample_seed:\
+          \ int,\n    output_path: str,\n) -> tuple[str, bool, int]:\n    \"\"\"Normalize\
+          \ a local JSONL file to prompt rows for GuideLLM.\n\n    Returns the original\
+          \ URI unchanged when it is an upstream dataset ID.\n    \"\"\"\n    import\
+          \ json\n    import os\n    import random\n    from pathlib import Path\n\
+          \n    if not uri:\n        raise ValueError(\"evaluation_dataset_uri must\
+          \ identify a dataset\")\n    if max_requests <= 0:\n        raise ValueError(\"\
+          evaluation_max_samples must be greater than zero\")\n\n    if uri.startswith(\"\
+          pvc://\") or os.path.isabs(uri):\n        dataset_path = Path(_resolve_evaluation_dataset_path(uri,\
+          \ mount_path, persistent_pvc))\n        if not dataset_path.exists():\n\
+          \            raise FileNotFoundError(f\"Evaluation dataset was not found\
+          \ on the PVC: {dataset_path}\")\n    else:\n        mounted_path = Path(_resolve_evaluation_dataset_path(uri,\
+          \ mount_path, persistent_pvc))\n        if not mounted_path.exists():\n\
+          \            return uri, False, 0\n        dataset_path = mounted_path\n\
+          \n    if dataset_path.is_dir():\n        candidates = sorted(dataset_path.glob(\"\
+          *.jsonl\"))\n        if not candidates:\n            raise ValueError(f\"\
+          No JSONL dataset found in {dataset_path}\")\n        dataset_path = candidates[0]\n\
+          \    if not dataset_path.is_file():\n        raise ValueError(f\"Evaluation\
+          \ dataset is not a JSONL file: {dataset_path}\")\n\n    prompts = []\n \
+          \   with dataset_path.open() as dataset_file:\n        for line_number,\
+          \ line in enumerate(dataset_file, start=1):\n            if not line.strip():\n\
+          \                continue\n            try:\n                prompts.append(_extract_evaluation_prompt(json.loads(line)))\n\
+          \            except (json.JSONDecodeError, ValueError) as exc:\n       \
+          \         raise ValueError(f\"Invalid evaluation record on line {line_number}:\
+          \ {exc}\") from exc\n    if not prompts:\n        raise ValueError(f\"The\
+          \ evaluation dataset contains no prompts: {dataset_path}\")\n    if len(prompts)\
+          \ > max_requests:\n        prompts = random.Random(sample_seed).sample(prompts,\
+          \ max_requests)\n\n    normalized_path = Path(output_path)\n    normalized_path.parent.mkdir(parents=True,\
+          \ exist_ok=True)\n    with normalized_path.open(\"w\") as normalized_file:\n\
+          \        for prompt in prompts:\n            normalized_file.write(json.dumps({\"\
+          prompt\": prompt}, ensure_ascii=False) + \"\\n\")\n    return str(normalized_path),\
+          \ True, len(prompts)\n\n\ndef _download_upstream_file(url: str, filename:\
+          \ str, attempts: int = 3) -> bytes:\n    \"\"\"Download one upstream file\
+          \ with short retries for transient failures.\"\"\"\n    import http.client\n\
+          \    import time\n    import urllib.error\n    import urllib.request\n\n\
+          \    request = urllib.request.Request(url, headers={\"User-Agent\": \"kfp-speculator-evaluator\"\
+          })\n    last_error = None\n    for attempt in range(1, attempts + 1):\n\
+          \        try:\n            with urllib.request.urlopen(request, timeout=60)\
+          \ as response:\n                contents = response.read()\n           \
+          \ if contents:\n                return contents\n            last_error\
+          \ = RuntimeError(f\"Downloaded an empty upstream evaluation file: {filename}\"\
+          )\n        except urllib.error.HTTPError as exc:\n            if exc.code\
+          \ != 429 and not 500 <= exc.code < 600:\n                raise RuntimeError(f\"\
+          Could not download upstream evaluation file {filename}: HTTP {exc.code}\"\
+          ) from exc\n            last_error = exc\n        except (urllib.error.URLError,\
+          \ TimeoutError, OSError, http.client.HTTPException) as exc:\n          \
+          \  last_error = exc\n\n        if attempt < attempts:\n            delay_seconds\
+          \ = attempt\n            print(\n                f\"Download attempt {attempt}/{attempts}\
+          \ for {filename} failed: {last_error}; \"\n                f\"retrying in\
+          \ {delay_seconds}s\",\n                flush=True,\n            )\n    \
+          \        time.sleep(delay_seconds)\n\n    raise RuntimeError(\n        f\"\
+          Failed to download upstream evaluation file {filename} after {attempts}\
+          \ attempts\"\n    ) from last_error\n\n\ndef _download_upstream_evaluator(destination:\
+          \ str) -> str:\n    \"\"\"Download the pinned upstream evaluator and its\
+          \ adjacent Python modules.\n\n    The cluster package index does not publish\
+          \ ``speculators>0.7.1``. The\n    evaluator only imports ``speculators.provenance``\
+          \ for its best-effort\n    command metadata, so use that exact pinned upstream\
+          \ module as a local\n    compatibility namespace rather than installing\
+          \ an unavailable package.\n    \"\"\"\n    from pathlib import Path\n\n\
+          \    revision = \"7883cd44264e6958cfc003963e5cdb895eb53bf1\"\n    source_dir\
+          \ = Path(destination)\n    source_dir.mkdir(parents=True, exist_ok=True)\n\
+          \    for filename in (\"evaluate.py\", \"perf_utils.py\", \"mrcr.py\"):\n\
+          \        url = f\"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/scripts/evaluate/{filename}\"\
+          \n        contents = _download_upstream_file(url, filename)\n        (source_dir\
+          \ / filename).write_bytes(contents)\n    provenance_package = source_dir\
+          \ / \"compat\" / \"speculators\"\n    provenance_package.mkdir(parents=True,\
+          \ exist_ok=True)\n    (provenance_package / \"__init__.py\").write_text('\"\
+          \"\"Pinned upstream provenance helper namespace.\"\"\"\\n')\n    provenance_url\
+          \ = (\n        f\"https://raw.githubusercontent.com/vllm-project/speculators/{revision}/src/speculators/provenance.py\"\
+          \n    )\n    provenance_contents = _download_upstream_file(provenance_url,\
+          \ \"provenance.py\")\n    (provenance_package / \"provenance.py\").write_bytes(provenance_contents)\n\
+          \    return str(source_dir / \"evaluate.py\")\n\n\ndef _build_upstream_evaluate_command(\n\
+          \    python_executable: str,\n    script_path: str,\n    target: str,\n\
+          \    dataset: str,\n    subsets: str,\n    output_dir: str,\n    max_requests:\
+          \ int,\n    max_tokens: int,\n    temperature: float,\n) -> list[str]:\n\
+          \    \"\"\"Build Fynn's documented ``evaluate.py sweep`` command.\"\"\"\n\
+          \    import json\n\n    return [\n        python_executable,\n        script_path,\n\
+          \        \"--target\",\n        target,\n        \"--dataset\",\n      \
+          \  dataset,\n        \"--subsets\",\n        subsets,\n        \"--output-dir\"\
+          ,\n        output_dir,\n        \"--max-requests\",\n        str(max_requests),\n\
+          \        \"--gen-kwargs\",\n        json.dumps({\"temperature\": temperature,\
+          \ \"max_tokens\": max_tokens}),\n        \"sweep\",\n    ]\n\n\ndef _run_upstream_evaluate(command:\
+          \ list[str], environment: dict[str, str], timeout_seconds: int) -> None:\n\
+          \    \"\"\"Run the pinned upstream sweep with a bounded timeout.\"\"\"\n\
+          \    import subprocess\n\n    try:\n        subprocess.run(command, check=True,\
+          \ env=environment, timeout=timeout_seconds)\n    except subprocess.TimeoutExpired\
+          \ as exc:\n        raise TimeoutError(f\"Upstream Speculators evaluation\
+          \ timed out after {timeout_seconds} seconds\") from exc\n\n\ndef evaluate_draft_model(\n\
+          \    output_metrics: dsl.Output[dsl.Metrics],\n    output_results: dsl.Output[dsl.Artifact],\n\
+          \    verifier_model: str,\n    draft_model_path: str,\n    evaluation_dataset_uri:\
+          \ str,\n    evaluation_speculator_type: str,\n    evaluation_dataset_pvc:\
+          \ str = \"\",\n    evaluation_max_samples: int = 80,\n    evaluation_max_tokens:\
+          \ int = 256,\n    evaluation_temperature: float = 0.0,\n    evaluation_num_speculative_tokens:\
+          \ int = 5,\n    evaluation_gpu_memory_utilization: float = 0.9,\n    evaluation_port:\
+          \ int = 8000,\n    evaluation_startup_timeout_seconds: int = 900,\n    evaluation_timeout_seconds:\
+          \ int = 7200,\n    evaluation_sample_seed: int = 42,\n    evaluation_model_mount_path:\
+          \ str = \"/mnt/persistent\",\n    evaluation_dataset_mount_path: str = \"\
+          /mnt/persistent\",\n) -> None:\n    \"\"\"Run the upstream Speculators performance\
+          \ sweep against a speculative vLLM server.\n\n    The component starts vLLM\
+          \ with the verifier and draft model, then runs the\n    pinned upstream\
+          \ ``scripts/evaluate/evaluate.py sweep`` against its OpenAI\n    endpoint.\
+          \ Upstream results (acceptance.csv, perf_results.csv, raw GuideLLM\n   \
+          \ JSON, and provenance) are returned in ``output_results``.\n\n    A local\
+          \ JSONL/PVC dataset may contain prompts, chat messages, or conversation\n\
+          \    records. Local records are normalized to prompt JSONL and deterministically\n\
+          \    capped at ``evaluation_max_samples``. A Hugging Face dataset ID is\
+          \ passed\n    directly to the upstream script, using its HumanEval example\
+          \ subset.\n\n    Use paths relative to the configured mount without a PVC\
+          \ prefix. With\n    ``pvc://`` syntax, prefix the path with the exact mounted\
+          \ claim name; for\n    example, use ``pvc://shared/models/ultrachat.jsonl``\
+          \ when the claim is\n    ``shared``.\n\n    Args:\n        output_metrics:\
+          \ KFP metrics for acceptance and sweep performance results.\n        output_results:\
+          \ Directory artifact containing upstream CSVs and raw GuideLLM output.\n\
+          \        verifier_model: Verifier directory under the model mount, optionally\
+          \ using pvc://<claim>/<path> syntax.\n        draft_model_path: Draft directory\
+          \ under the model mount, optionally using pvc://<claim>/<path> syntax.\n\
+          \        evaluation_dataset_uri: Hugging Face dataset ID, relative path\
+          \ under the dataset mount, or\n            ``pvc://<claim>/<path>``.\n \
+          \       evaluation_speculator_type: Speculator method configured on the\
+          \ vLLM server.\n        evaluation_dataset_pvc: Mounted PVC claim name.\
+          \ Every ``pvc://`` URI must use this exact\n            claim name; relative\
+          \ paths need no PVC prefix.\n        evaluation_max_samples: Maximum GuideLLM\
+          \ requests at each sweep point.\n        evaluation_max_tokens: Maximum\
+          \ generation tokens for each request.\n        evaluation_temperature: Sampling\
+          \ temperature passed through to GuideLLM.\n        evaluation_num_speculative_tokens:\
+          \ Number of draft tokens proposed by vLLM.\n        evaluation_gpu_memory_utilization:\
+          \ vLLM GPU memory utilization fraction.\n        evaluation_port: Local\
+          \ port for the temporary vLLM endpoint.\n        evaluation_startup_timeout_seconds:\
+          \ Maximum wait for the vLLM health endpoint.\n        evaluation_timeout_seconds:\
+          \ Maximum time allowed for the upstream evaluation sweep.\n        evaluation_sample_seed:\
+          \ Seed used when sampling a local JSONL dataset.\n        evaluation_model_mount_path:\
+          \ Root directory for verifier and draft models; resolved paths must stay\
+          \ inside it.\n        evaluation_dataset_mount_path: Root directory for\
+          \ local datasets; resolved paths must stay inside it.\n    \"\"\"\n    import\
+          \ csv\n    import json\n    import math\n    import os\n    import shutil\n\
+          \    import signal\n    import subprocess\n    import sys\n    import tempfile\n\
+          \    import time\n    from pathlib import Path\n\n    import requests\n\n\
+          \    if shutil.which(\"vllm\") is None:\n        raise RuntimeError(\"vllm\
+          \ binary not found - ensure vLLM is installed in the base image\")\n   \
+          \ if evaluation_max_samples <= 0:\n        raise ValueError(\"evaluation_max_samples\
+          \ must be greater than zero\")\n    if evaluation_max_tokens <= 0:\n   \
+          \     raise ValueError(\"evaluation_max_tokens must be greater than zero\"\
+          )\n    if evaluation_timeout_seconds <= 0:\n        raise ValueError(\"\
+          evaluation_timeout_seconds must be greater than zero\")\n\n    verifier_path\
+          \ = _resolve_evaluation_dataset_path(\n        verifier_model,\n       \
+          \ evaluation_model_mount_path,\n        evaluation_dataset_pvc,\n    )\n\
+          \    draft_path = _resolve_evaluation_dataset_path(\n        draft_model_path,\n\
+          \        evaluation_model_mount_path,\n        evaluation_dataset_pvc,\n\
+          \    )\n    if not os.path.isdir(verifier_path):\n        raise FileNotFoundError(f\"\
+          Verifier model directory does not exist: {verifier_path}\")\n    if not\
+          \ os.path.isdir(draft_path):\n        raise FileNotFoundError(f\"Draft model\
+          \ directory does not exist: {draft_path}\")\n\n    methods = {\"eagle3\"\
+          : \"eagle3\", \"dflash\": \"dflash\", \"mtp\": \"mtp\", \"peagle\": \"eagle3\"\
+          }\n    method = methods.get(evaluation_speculator_type.lower())\n    if\
+          \ method is None:\n        raise ValueError(f\"Unsupported evaluation_speculator_type:\
+          \ {evaluation_speculator_type}\")\n\n    os.environ[\"VLLM_WORKER_MULTIPROC_METHOD\"\
+          ] = \"spawn\"\n    endpoint = f\"http://127.0.0.1:{evaluation_port}\"\n\
+          \    server_process = None\n\n    def stop_server() -> None:\n        nonlocal\
+          \ server_process\n        if server_process is None:\n            return\n\
+          \        if server_process.poll() is None:\n            try:\n         \
+          \       os.killpg(server_process.pid, signal.SIGTERM)\n            except\
+          \ ProcessLookupError:\n                pass\n            try:\n        \
+          \        server_process.wait(timeout=30)\n            except subprocess.TimeoutExpired:\n\
+          \                try:\n                    os.killpg(server_process.pid,\
+          \ signal.SIGKILL)\n                except ProcessLookupError:\n        \
+          \            pass\n                server_process.wait()\n        server_process\
+          \ = None\n\n    with tempfile.TemporaryDirectory(prefix=\"speculator-evaluate-\"\
+          ) as temp_dir:\n        work_dir = Path(temp_dir)\n        upstream_dir\
+          \ = work_dir / \"scripts\" / \"evaluate\"\n        upstream_script = _download_upstream_evaluator(str(upstream_dir))\n\
+          \        local_dataset_path, is_local_dataset, local_request_count = _prepare_local_evaluation_dataset(\n\
+          \            evaluation_dataset_uri,\n            evaluation_dataset_mount_path,\n\
+          \            evaluation_dataset_pvc,\n            evaluation_max_samples,\n\
+          \            evaluation_sample_seed,\n            str(work_dir / \"evaluation_prompts.jsonl\"\
+          ),\n        )\n        subsets = \"local\" if is_local_dataset else \"HumanEval\"\
+          \n        results_dir = work_dir / \"upstream-results\"\n        command\
+          \ = [\n            \"vllm\",\n            \"serve\",\n            verifier_path,\n\
+          \            \"--host\",\n            \"127.0.0.1\",\n            \"--port\"\
+          ,\n            str(evaluation_port),\n            \"--gpu-memory-utilization\"\
+          ,\n            str(evaluation_gpu_memory_utilization),\n            \"--speculative-config\"\
+          ,\n            json.dumps(\n                {\n                    \"method\"\
+          : method,\n                    \"model\": draft_path,\n                \
+          \    \"draft_tensor_parallel_size\": 1,\n                    \"num_speculative_tokens\"\
+          : evaluation_num_speculative_tokens,\n                }\n            ),\n\
+          \        ]\n        evaluate_command = _build_upstream_evaluate_command(\n\
+          \            sys.executable,\n            upstream_script,\n           \
+          \ f\"{endpoint}/v1\",\n            local_dataset_path,\n            subsets,\n\
+          \            str(results_dir),\n            local_request_count if is_local_dataset\
+          \ else evaluation_max_samples,\n            evaluation_max_tokens,\n   \
+          \         evaluation_temperature,\n        )\n\n        try:\n         \
+          \   server_process = subprocess.Popen(command, start_new_session=True)\n\
+          \            deadline = time.monotonic() + evaluation_startup_timeout_seconds\n\
+          \            while time.monotonic() < deadline:\n                if server_process.poll()\
+          \ is not None:\n                    raise RuntimeError(f\"Speculative vLLM\
+          \ exited during startup with code {server_process.returncode}\")\n     \
+          \           try:\n                    response = requests.get(f\"{endpoint}/health\"\
+          , timeout=5)\n                    if response.ok:\n                    \
+          \    break\n                except requests.RequestException:\n        \
+          \            pass\n                time.sleep(2)\n            else:\n  \
+          \              raise TimeoutError(\n                    f\"Speculative vLLM\
+          \ did not become ready within {evaluation_startup_timeout_seconds} seconds\"\
+          \n                )\n\n            dataset_description = (\n           \
+          \     f\"local dataset ({local_request_count} prompts)\" if is_local_dataset\
+          \ else evaluation_dataset_uri\n            )\n            print(\n     \
+          \           f\"Running upstream Speculators evaluation at commit 7883cd44264e6958cfc003963e5cdb895eb53bf1:\
+          \ \"\n                f\"{dataset_description}\",\n                flush=True,\n\
+          \            )\n            evaluator_environment = os.environ.copy()\n\
+          \            compat_path = str(upstream_dir / \"compat\")\n            existing_pythonpath\
+          \ = evaluator_environment.get(\"PYTHONPATH\")\n            evaluator_environment[\"\
+          PYTHONPATH\"] = (\n                compat_path if not existing_pythonpath\
+          \ else f\"{compat_path}{os.pathsep}{existing_pythonpath}\"\n           \
+          \ )\n            _run_upstream_evaluate(evaluate_command, evaluator_environment,\
+          \ evaluation_timeout_seconds)\n        finally:\n            stop_server()\n\
+          \n        acceptance_path = results_dir / \"acceptance.csv\"\n        if\
+          \ not acceptance_path.is_file():\n            raise RuntimeError(f\"Upstream\
+          \ evaluator did not produce {acceptance_path}\")\n        with acceptance_path.open(newline=\"\
+          \") as acceptance_file:\n            acceptance_rows = list(csv.DictReader(acceptance_file))\n\
+          \        if not acceptance_rows:\n            raise RuntimeError(\"Upstream\
+          \ evaluator produced an empty acceptance.csv\")\n\n        total_drafts\
+          \ = sum(float(row.get(\"num_drafts\") or 0) for row in acceptance_rows)\n\
+          \        total_draft_tokens = sum(float(row.get(\"num_draft_tokens\") or\
+          \ 0) for row in acceptance_rows)\n        total_accepted_tokens = sum(float(row.get(\"\
+          num_accepted_tokens\") or 0) for row in acceptance_rows)\n        if total_drafts\
+          \ > 0:\n            output_metrics.log_metric(\"acceptance_length\", 1.0\
+          \ + total_accepted_tokens / total_drafts)\n            output_metrics.log_metric(\"\
+          num_drafts\", total_drafts)\n        if total_draft_tokens > 0:\n      \
+          \      output_metrics.log_metric(\"acceptance_rate\", total_accepted_tokens\
+          \ / total_draft_tokens)\n            output_metrics.log_metric(\"num_draft_tokens\"\
+          , total_draft_tokens)\n            output_metrics.log_metric(\"num_accepted_tokens\"\
+          , total_accepted_tokens)\n        for position in range(100):\n        \
+          \    column = f\"acceptance_at_pos_{position}\"\n            if not any(column\
+          \ in row for row in acceptance_rows):\n                break\n         \
+          \   weighted = sum(float(row.get(column) or 0) * float(row.get(\"num_drafts\"\
+          ) or 0) for row in acceptance_rows)\n            if total_drafts > 0:\n\
+          \                output_metrics.log_metric(column, weighted / total_drafts)\n\
+          \n        performance_path = results_dir / \"perf_results.csv\"\n      \
+          \  if performance_path.is_file():\n            with performance_path.open(newline=\"\
+          \") as performance_file:\n                performance_rows = list(csv.DictReader(performance_file))\n\
+          \            metric_columns = {\n                \"rps_median\": (\"max_requests_per_second\"\
+          , max),\n                \"output_tps_median\": (\"max_output_tokens_per_second\"\
+          , max),\n                \"latency_median_s\": (\"min_latency_median_seconds\"\
+          , min),\n                \"itl_median_ms\": (\"min_inter_token_latency_milliseconds\"\
+          , min),\n                \"ttft_median_ms\": (\"min_time_to_first_token_milliseconds\"\
+          , min),\n            }\n            for column, (metric_name, selector)\
+          \ in metric_columns.items():\n                values = []\n            \
+          \    for row in performance_rows:\n                    try:\n          \
+          \              value = float(row.get(column, \"\"))\n                  \
+          \  except (TypeError, ValueError):\n                        continue\n \
+          \                   if math.isfinite(value):\n                        values.append(value)\n\
+          \                if values:\n                    output_metrics.log_metric(metric_name,\
+          \ selector(values))\n\n        artifact_path = Path(output_results.path)\n\
+          \        if artifact_path.exists() and artifact_path.is_file():\n      \
+          \      artifact_path.unlink()\n        shutil.copytree(results_dir, artifact_path,\
+          \ dirs_exist_ok=True)\n        output_results.name = \"speculator-performance-evaluation\"\
+          \n        output_results.metadata[\"evaluation_tool\"] = \"vllm-project/speculators/scripts/evaluate/evaluate.py\"\
+          \n        output_results.metadata[\"evaluation_tool_revision\"] = \"7883cd44264e6958cfc003963e5cdb895eb53bf1\"\
+          \n        output_results.metadata[\"evaluation_mode\"] = \"sweep\"\n   \
+          \     output_results.metadata[\"evaluation_dataset\"] = evaluation_dataset_uri\n\
+          \        output_results.metadata[\"evaluation_subsets\"] = subsets\n   \
+          \     output_results.metadata[\"evaluation_max_samples\"] = evaluation_max_samples\n\
+          \n"
+        image: quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b
+        resources:
+          accelerator:
+            count: '1'
+            resourceCount: '1'
+            resourceType: nvidia.com/gpu
+            type: nvidia.com/gpu
+    exec-kubeflow-model-registry:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - kubeflow_model_registry
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'model-registry==0.3.9'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef kubeflow_model_registry(\n    pvc_mount_path: str,\n    model_pvc_name:\
+          \ str = \"\",\n    input_model: dsl.Input[dsl.Model] = None,\n    input_metrics:\
+          \ dsl.Input[dsl.Metrics] = None,\n    eval_metrics: dsl.Input[dsl.Metrics]\
+          \ = None,\n    eval_results: dsl.Input[dsl.Artifact] = None,\n    registry_address:\
+          \ str = \"\",\n    registry_port: int = 8080,\n    model_name: str = \"\
+          fine-tuned-model\",\n    model_version: str = \"1.0.0\",\n    model_format_name:\
+          \ str = \"pytorch\",\n    model_format_version: str = \"1.0\",\n    model_description:\
+          \ str = \"\",\n    author: str = \"pipeline\",\n    shared_log_file: str\
+          \ = \"pipeline_log.txt\",\n    # -------------------------------------------------------------------------\n\
+          \    # PROVENANCE / LINEAGE FIELDS (auto-populated from KFP placeholders)\n\
+          \    # -------------------------------------------------------------------------\n\
+          \    source_pipeline_name: str = \"\",\n    source_pipeline_run_id: str\
+          \ = \"\",\n    source_pipeline_run_name: str = \"\",\n    source_namespace:\
+          \ str = \"\",\n) -> str:\n    \"\"\"Register model to Kubeflow Model Registry\
+          \ with full provenance tracking.\n\n    Uses the upstream model artifact\
+          \ (input_model) produced by training,\n    or falls back to PVC path if\
+          \ no artifact is provided.\n\n    Args:\n        pvc_mount_path: PVC mount\
+          \ path for workspace storage.\n        model_pvc_name: Name of the persistent\
+          \ PVC containing the model.\n        input_model: Model artifact from training\
+          \ step.\n        input_metrics: Training metrics.\n        eval_metrics:\
+          \ Evaluation metrics from lm-eval.\n        eval_results: Full evaluation\
+          \ results JSON artifact.\n        registry_address: Model Registry server\
+          \ address (hostname or IP).\n        registry_port: Model Registry server\
+          \ port (default: 8080).\n        model_name: Name for the registered model.\n\
+          \        model_version: Version string for the model (e.g. \"1.0.0\").\n\
+          \        model_format_name: Model format name (e.g. \"pytorch\", \"onnx\"\
+          ).\n        model_format_version: Model format version.\n        model_description:\
+          \ Optional description for the model.\n        author: Author name for the\
+          \ model registration.\n        shared_log_file: Filename for shared pipeline\
+          \ log.\n        source_pipeline_name: Name of the source KFP pipeline.\n\
+          \        source_pipeline_run_id: Unique ID of the pipeline run.\n      \
+          \  source_pipeline_run_name: Display name of the pipeline run.\n       \
+          \ source_namespace: Namespace where pipeline runs (auto-detected if empty).\n\
+          \    \"\"\"\n    import os\n\n    from model_registry import ModelRegistry\n\
+          \    from model_registry.exceptions import StoreError\n\n    print(\"=\"\
+          \ * 60)\n    print(\"MODEL REGISTRY COMPONENT\")\n    print(\"=\" * 60)\n\
+          \n    # Derive model URI from the persistent PVC when provided. KFP artifact\
+          \ paths\n    # such as /s3/... are temporary task-local paths and are not\
+          \ valid storage\n    # locations for a persistent Model Registry entry or\
+          \ KServe deployment.\n    resolved_model_name = model_name  # User's parameter\
+          \ takes precedence\n    model_uri = \"\"\n    base_model_name = None\n \
+          \   if input_model:\n        meta = getattr(input_model, \"metadata\", {})\
+          \ or {}\n        base_model_name = meta.get(\"model_name\")  # e.g., \"\
+          Qwen/Qwen2.5-1.5B-Instruct\"\n        # Only use metadata name if user didn't\
+          \ provide one (kept default)\n        if model_name == \"fine-tuned-model\"\
+          \ and base_model_name:\n            resolved_model_name = base_model_name\n\
+          \        if model_pvc_name:\n            model_uri = f\"pvc://{model_pvc_name}/final_model\"\
+          \n        else:\n            model_uri = meta.get(\"artifact_path\") or\
+          \ getattr(input_model, \"path\", \"\") or model_uri\n            if not\
+          \ model_uri:\n                model_uri = f\"pvc://{pvc_mount_path}/final_model\"\
+          \n    else:\n        model_uri = f\"pvc://{model_pvc_name}/final_model\"\
+          \ if model_pvc_name else f\"pvc://{pvc_mount_path}/final_model\"\n\n   \
+          \ print(f\"\\n  Model Name: {resolved_model_name}\")\n    if base_model_name:\n\
+          \        print(f\"  Base Model: {base_model_name}\")\n    print(f\"  Model\
+          \ Version: {model_version}\")\n    print(f\"  Model URI: {model_uri}\")\n\
+          \    print(f\"  Registry: {registry_address}:{registry_port}\")\n\n    #\
+          \ Register to Model Registry\n    model_id = \"SKIPPED\"\n    if registry_address:\n\
+          \        print(\"\\n[Registering to Model Registry...]\")\n\n        # Ensure\
+          \ address has scheme for client URL building\n        server_addr = registry_address\n\
+          \        if not server_addr.startswith(\"http://\") and not server_addr.startswith(\"\
+          https://\"):\n            server_addr = f\"http://{server_addr}\"\n    \
+          \    # Create client (HTTP/insecure)\n        client = ModelRegistry(\n\
+          \            server_address=server_addr,\n            port=registry_port,\n\
+          \            author=author,\n            is_secure=False,  # HTTP\n    \
+          \    )\n\n        # Collect metrics into metadata if provided\n        version_metadata\
+          \ = {}\n        eval_summary = {}\n        try:\n            # -------------------------------------------------------------------------\n\
+          \            # PROVENANCE (logged here, passed as direct params to register_model)\n\
+          \            # -------------------------------------------------------------------------\n\
+          \            # Auto-detect namespace if not provided\n            resolved_namespace\
+          \ = source_namespace\n            if not resolved_namespace:\n         \
+          \       try:\n                    with open(\"/var/run/secrets/kubernetes.io/serviceaccount/namespace\"\
+          , \"r\") as f:\n                        resolved_namespace = f.read().strip()\n\
+          \                        print(f\"\\n  Auto-detected namespace: {resolved_namespace}\"\
+          )\n                except Exception:\n                    resolved_namespace\
+          \ = \"\"\n\n            print(\"\\n  Provenance:\")\n            print(\"\
+          \    - Source Kind: kfp\")\n            print(\"    - Source Class: pipelinerun\"\
+          )\n            if source_pipeline_name:\n                version_metadata[\"\
+          pipeline_name\"] = source_pipeline_name\n                print(f\"    -\
+          \ Pipeline Name: {source_pipeline_name}\")\n            if source_pipeline_run_id:\n\
+          \                print(f\"    - Run ID: {source_pipeline_run_id}\")\n  \
+          \          if source_pipeline_run_name:\n                print(f\"    -\
+          \ Run Name: {source_pipeline_run_name} (used for UI link text)\")\n    \
+          \        if resolved_namespace:\n                print(f\"    - Namespace:\
+          \ {resolved_namespace}\")\n\n            # Add base model info\n       \
+          \     if base_model_name:\n                version_metadata[\"base_model\"\
+          ] = base_model_name\n\n            # Add training metrics (hyperparameters)\n\
+          \            if input_metrics and getattr(input_metrics, \"metadata\", None):\n\
+          \                print(\"\\n  Training Hyperparameters:\")\n           \
+          \     for k, v in input_metrics.metadata.items():\n                    if\
+          \ k not in (\"display_name\", \"store_session_info\"):\n               \
+          \         version_metadata[f\"training_{k}\"] = str(v)\n               \
+          \         print(f\"    - {k}: {v}\")\n\n            # Add evaluation metrics\n\
+          \            if eval_metrics and getattr(eval_metrics, \"metadata\", None):\n\
+          \                print(\"\\n  Evaluation Metrics:\")\n                for\
+          \ k, v in eval_metrics.metadata.items():\n                    if k not in\
+          \ (\"display_name\", \"store_session_info\"):\n                        version_metadata[f\"\
+          eval_{k}\"] = str(v)\n                        # Extract primary accuracy\
+          \ metrics for summary\n                        if \"_acc,\" in k or \"_acc_norm,\"\
+          \ in k:\n                            if \"stderr\" not in k:\n         \
+          \                       eval_summary[k] = v\n                          \
+          \      print(f\"    - {k}: {v:.4f}\" if isinstance(v, float) else f\"  \
+          \  - {k}: {v}\")\n\n                # Print eval config\n              \
+          \  eval_tasks = eval_metrics.metadata.get(\"eval_tasks\", \"\")\n      \
+          \          eval_duration = eval_metrics.metadata.get(\"eval_duration_seconds\"\
+          , \"\")\n                if eval_tasks:\n                    print(f\" \
+          \   - Tasks: {eval_tasks}\")\n                if eval_duration:\n      \
+          \              print(f\"    - Duration: {eval_duration}s\")\n\n        \
+          \    # Add summary of best metrics\n            if eval_summary:\n     \
+          \           # Find the best accuracy metric\n                best_metric\
+          \ = max(eval_summary.items(), key=lambda x: x[1] if isinstance(x[1], (int,\
+          \ float)) else 0)\n                version_metadata[\"eval_best_metric\"\
+          ] = best_metric[0]\n                version_metadata[\"eval_best_score\"\
+          ] = str(best_metric[1])\n                print(\n                    f\"\
+          \\n  Best Eval Score: {best_metric[0]} = {best_metric[1]:.4f}\"\n      \
+          \              if isinstance(best_metric[1], float)\n                  \
+          \  else f\"\\n  Best: {best_metric}\"\n                )\n\n           \
+          \ print(f\"\\n  Total metadata keys: {len(version_metadata)}\")\n      \
+          \  except Exception as e:\n            print(f\"  Warning: Could not extract\
+          \ metrics: {e}\")\n            version_metadata = {}\n\n        try:\n \
+          \           registered_model = client.register_model(\n                name=resolved_model_name,\n\
+          \                uri=model_uri,\n                version=model_version,\n\
+          \                model_format_name=model_format_name,\n                model_format_version=model_format_version,\n\
+          \                author=author,\n                owner=author,\n       \
+          \         description=model_description or f\"Registered via pipeline -\
+          \ {model_version}\",\n                # Provenance (direct params in SDK\
+          \ 0.3.4+)\n                model_source_kind=\"kfp\",\n                model_source_class=\"\
+          pipelinerun\",\n                model_source_name=source_pipeline_run_name\
+          \ or source_pipeline_name or None,\n                model_source_id=source_pipeline_run_id\
+          \ or None,\n                model_source_group=resolved_namespace or None,\n\
+          \                # Additional metadata (training/eval metrics, run name,\
+          \ etc.)\n                metadata=version_metadata or None,\n          \
+          \  )\n            model_id = registered_model.id\n            print(f\"\
+          \  Registered model: {registered_model.name} (ID: {model_id})\")\n     \
+          \   except StoreError as e:\n            msg = str(e)\n            if \"\
+          already exists\" in msg.lower():\n                print(f\"  Model version\
+          \ already exists; skipping create. Details: {msg}\")\n                model_id\
+          \ = f\"{resolved_model_name}:{model_version}\"\n            else:\n    \
+          \            raise\n\n    # Write to shared log\n    log_path = os.path.join(pvc_mount_path,\
+          \ shared_log_file)\n    with open(log_path, \"a\") as f:\n        f.write(f\"\
+          Model Registry: {model_name} v{model_version} (ID: {model_id})\\n\")\n \
+          \   print(f\"\\n[Log written to {log_path}]\")\n\n    print(\"\\n\" + \"\
+          =\" * 60)\n    print(f\"COMPLETE - Model ID: {model_id}\")\n    print(\"\
+          =\" * 60)\n\n    return str(model_id)\n\n"
+        image: quay.io/opendatahub/odh-th06-cpu-torch291-py312:odh-3.4
+    exec-online-draft-model-training:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - online_draft_model_training
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ 'kubernetes' 'olot' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\n__KFP_EMBEDDED_ARCHIVE_B64 = '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'\n\
+          \nimport base64 as __kfp_b64\nimport io as __kfp_io\nimport os as __kfp_os\n\
+          import sys as __kfp_sys\nimport tarfile as __kfp_tarfile\nimport tempfile\
+          \ as __kfp_tempfile\n\n# Extract embedded archive at import time to ensure\
+          \ sys.path and globals are set\n__kfp_tmpdir = __kfp_tempfile.TemporaryDirectory()\n\
+          __KFP_EMBEDDED_ASSET_DIR = __kfp_tmpdir.name\ntry:\n    __kfp_bytes = __kfp_b64.b64decode(__KFP_EMBEDDED_ARCHIVE_B64.encode('ascii'))\n\
+          \    with __kfp_tarfile.open(fileobj=__kfp_io.BytesIO(__kfp_bytes), mode='r:gz')\
+          \ as __kfp_tar:\n        __kfp_tar.extractall(path=__KFP_EMBEDDED_ASSET_DIR)\n\
+          except Exception as __kfp_e:\n    raise RuntimeError(f'Failed to extract\
+          \ embedded archive: {__kfp_e}')\n\n# Always prepend the extracted directory\
+          \ to sys.path for import resolution\nif __KFP_EMBEDDED_ASSET_DIR not in\
+          \ __kfp_sys.path:\n    __kfp_sys.path.insert(0, __KFP_EMBEDDED_ASSET_DIR)\n\
+          \n\n\n\ndef online_draft_model_training(\n    verifier_model: str,\n   \
+          \ output_dir: str,\n    pvc_path: str,\n    dataset_name: str,\n    verifier_model_pvc:\
+          \ Optional[str] = None,\n    persistent_pvc: str = \"\",\n    persistent_mount_path:\
+          \ str = \"/mnt/persistent\",\n    total_seq_len: int = 2048,\n    speculator_type:\
+          \ str = \"eagle3\",\n    target_layer_ids: Optional[str] = None,\n    data_extraction_max_samples:\
+          \ Optional[int] = None,\n    data_extraction_regenerate_responses: bool\
+          \ = False,\n    data_extraction_concurrency: int = 4,\n    training_epochs:\
+          \ int = 3,\n    training_lr: float = 1e-4,\n    training_draft_vocab_size:\
+          \ Optional[int] = None,\n    training_num_layers: int = 1,\n    training_ttt_steps:\
+          \ int = 1,\n    training_norm_before_residual: bool = True,\n    training_norm_before_fc:\
+          \ bool = False,\n    training_embed_requires_grad: bool = False,\n    training_hidden_states_dtype:\
+          \ str = \"bfloat16\",\n    training_scheduler_type: str = \"linear\",\n\
+          \    training_scheduler_warmup_steps: Optional[int] = None,\n    training_scheduler_total_steps:\
+          \ Optional[int] = None,\n    training_scheduler_num_cosine_cycles: float\
+          \ = 0.5,\n    training_checkpoint_freq: float = 1.0,\n    training_save_best:\
+          \ bool = False,\n    training_log_freq: int = 1,\n    training_resume_from_checkpoint:\
+          \ bool = False,\n    training_from_pretrained: Optional[str] = None,\n \
+          \   training_resource_cpu: str = \"4\",\n    training_resource_gpu: int\
+          \ = 1,\n    training_resource_memory: str = \"64Gi\",\n    vllm_resource_gpu:\
+          \ int = 1,\n    vllm_resource_memory: str = \"96Gi\",\n    vllm_gpu_memory_utilization:\
+          \ float = 0.9,\n    vllm_readiness_timeout_minutes: int = 60,\n    enable_progression_tracking:\
+          \ bool = True,\n    metrics_port: int = 28080,\n    metrics_poll_interval_seconds:\
+          \ int = 30,\n    packages_to_install: Optional[str] = None,\n    pip_index_urls:\
+          \ Optional[str] = None,\n    training_envs: str = \"\",\n    training_runtime:\
+          \ str = \"vllm-extract-cuda\",\n    download_model: bool = False,\n    output_model:\
+          \ dsl.Output[dsl.Model] = None,\n    output_metrics: dsl.Output[dsl.Metrics]\
+          \ = None,\n    kubernetes_config: dsl.TaskConfig = None,\n):\n    \"\"\"\
+          Extract and train a draft model with a managed vLLM sidecar.\"\"\"\n   \
+          \ from pathlib import Path\n\n    def resolve_local_dataset_path(dataset_uri:\
+          \ str) -> str:\n        if not dataset_uri:\n            return dataset_uri\n\
+          \n        if dataset_uri.startswith(\"pvc://\"):\n            claim, separator,\
+          \ dataset_path = dataset_uri.removeprefix(\"pvc://\").partition(\"/\")\n\
+          \            if not claim or not separator or not dataset_path:\n      \
+          \          raise ValueError(\"PVC dataset URIs must use pvc://<claim>/<path>\"\
+          )\n            requested_path = Path(dataset_path)\n            if claim\
+          \ != persistent_pvc:\n                if requested_path.is_absolute() or\
+          \ \"..\" in requested_path.parts:\n                    raise ValueError(\"\
+          PVC dataset paths must remain relative\")\n                if requested_path.suffix.lower()\
+          \ not in {\".json\", \".jsonl\"}:\n                    raise ValueError(\"\
+          dataset files on the shared PVC must end in .json or .jsonl\")\n       \
+          \         return dataset_uri\n        elif \"://\" in dataset_uri:\n   \
+          \         return dataset_uri\n\n        else:\n            candidate = Path(dataset_uri)\n\
+          \            if candidate.suffix.lower() not in {\".json\", \".jsonl\"}:\n\
+          \                return dataset_uri\n            dataset_path = dataset_uri\n\
+          \n        if not persistent_pvc:\n            raise ValueError(\"persistent_pvc\
+          \ is required for local JSON/JSONL dataset paths\")\n\n        pvc_root\
+          \ = Path(persistent_mount_path).resolve()\n        candidate = Path(dataset_path)\n\
+          \        candidate = candidate if candidate.is_absolute() else pvc_root\
+          \ / candidate\n        resolved = candidate.resolve()\n        try:\n  \
+          \          relative_path = resolved.relative_to(pvc_root)\n        except\
+          \ ValueError as exc:\n            raise ValueError(\"local dataset paths\
+          \ must remain within persistent_mount_path\") from exc\n\n        if not\
+          \ relative_path.parts:\n            raise ValueError(\"dataset path must\
+          \ be a JSON or JSONL file under persistent_mount_path\")\n        if relative_path.suffix.lower()\
+          \ not in {\".json\", \".jsonl\"}:\n            raise ValueError(\"dataset\
+          \ files on the shared PVC must end in .json or .jsonl\")\n        if not\
+          \ resolved.is_file():\n            raise FileNotFoundError(f\"dataset file\
+          \ not found on persistent_pvc: {resolved}\")\n\n        return f\"pvc://{persistent_pvc}/{relative_path.as_posix()}\"\
+          \n\n    if verifier_model_pvc and not download_model:\n        verifier_model\
+          \ = verifier_model_pvc\n    dataset_name = resolve_local_dataset_path(dataset_name)\n\
+          \n    from speculator import run_speculator\n\n    run_speculator(\"online\"\
+          , locals())\n\n"
+        image: quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b
+    exec-speculative-decoding-serving:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - speculative_decoding_serving
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kubernetes>=28.1.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef speculative_decoding_serving(\n    namespace: str,\n    endpoint_name:\
+          \ str,\n    model_cache_pvc: str,\n    verifier_model_dir: str,\n    draft_model_dir:\
+          \ str,\n    runtime_image: str = (\n        \"registry.redhat.io/rhaii-fast/vllm-cuda-rhel9\"\
+          \n        \"@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a\"\
+          \n    ),\n    hardware_profile_name: str = \"gpu-profile\",\n    min_replicas:\
+          \ int = 1,\n    max_replicas: int = 1,\n    gpu_count: int = 1,\n    draft_tensor_parallel_size:\
+          \ int = 1,\n    max_model_len: int = 4096,\n    num_speculative_tokens:\
+          \ int = 3,\n    cpu_requests: str = \"2\",\n    memory_requests: str = \"\
+          8Gi\",\n    cpu_limits: str = \"2\",\n    memory_limits: str = \"8Gi\",\n\
+          \    gpu_memory_utilization: float = 0.9,\n    max_num_seqs: int = 16,\n\
+          \    trust_remote_code: bool = False,\n    enable_auth: bool = False,\n\
+          \    enable_external_route: bool = False,\n) -> str:\n    \"\"\"Serve a\
+          \ verifier and Eagle3 draft model through one vLLM endpoint.\n\n    The\
+          \ verifier and draft directories must already exist on ``model_cache_pvc``.\n\
+          \    Pass either a path relative to the PVC root or a ``pvc://<model_cache_pvc>/<path>``\n\
+          \    URI. KServe mounts the PVC root at ``/mnt/models``. The draft directory\
+          \ should\n    contain the speculator checkpoint's ``config.json`` and weights.\
+          \ vLLM receives\n    an Eagle3 ``--speculative-config`` that points to the\
+          \ draft path under that\n    root; the verifier is the primary ``--model``.\n\
+          \n    The component waits for the requested predictor configuration to finish\n\
+          \    rolling out and for KServe readiness. Updates release an old replica\
+          \ before\n    allocating replacement GPU resources, so single-replica updates\
+          \ have downtime.\n    Rollout and endpoint publication share a 30-minute\
+          \ timeout.\n    Reusing a stopped InferenceService clears its stop annotation\
+          \ to resume serving.\n\n    Args:\n        namespace: Namespace in which\
+          \ to create the KServe resources.\n        endpoint_name: DNS-compatible\
+          \ InferenceService name.\n        model_cache_pvc: PVC containing both model\
+          \ directories.\n        verifier_model_dir: Verifier directory relative\
+          \ to the PVC root or a matching ``pvc://`` URI.\n        draft_model_dir:\
+          \ Draft directory relative to the PVC root or a matching ``pvc://`` URI.\n\
+          \        runtime_image: vLLM CUDA image supporting Eagle3 speculative decoding.\n\
+          \        hardware_profile_name: Existing RHOAI HardwareProfile name in\n\
+          \            ``redhat-ods-applications``, or empty to skip lookup and remove\
+          \ an old\n            profile reference. A missing requested profile is\
+          \ an error.\n        min_replicas: Minimum number of predictor replicas.\n\
+          \        max_replicas: Maximum number of predictor replicas.\n        gpu_count:\
+          \ GPUs per predictor; also used as verifier vLLM tensor parallel size.\n\
+          \        draft_tensor_parallel_size: vLLM tensor parallel size for the draft\
+          \ model.\n        max_model_len: Maximum verifier context length.\n    \
+          \    num_speculative_tokens: Number of draft tokens proposed per step.\n\
+          \        cpu_requests: Predictor CPU request.\n        memory_requests:\
+          \ Predictor memory request.\n        cpu_limits: Predictor CPU limit.\n\
+          \        memory_limits: Predictor memory limit.\n        gpu_memory_utilization:\
+          \ Fraction of GPU memory available to vLLM.\n        max_num_seqs: Maximum\
+          \ concurrent sequences in the vLLM scheduler.\n        trust_remote_code:\
+          \ Pass ``--trust-remote-code`` for the draft checkpoint.\n        enable_auth:\
+          \ Enable RHOAI authentication for the exposed endpoint.\n        enable_external_route:\
+          \ Request external visibility and wait for the\n            platform-managed\
+          \ OpenShift Route to be admitted with the requested\n            authentication\
+          \ settings. No Route write permissions are needed. When\n            ``False``\
+          \ (the default), request cluster-local visibility and return\n         \
+          \   the internal cluster URL.\n\n    Returns:\n        The OpenAI-compatible\
+          \ ``/v1`` endpoint URL (external HTTPS Route URL when\n        ``enable_external_route=True``,\
+          \ internal cluster URL otherwise).\n    \"\"\"\n    import copy\n    import\
+          \ hashlib\n    import json\n    import re\n    import time\n    from urllib.parse\
+          \ import urlparse\n\n    from kubernetes import client as kclient\n    from\
+          \ kubernetes import config\n\n    dns_label = re.compile(r\"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$\"\
+          )\n\n    def validate_dns_label(value: str, field_name: str) -> str:\n \
+          \       value = value.strip()\n        if not value or len(value) > 63 or\
+          \ not dns_label.fullmatch(value):\n            raise ValueError(f\"{field_name}\
+          \ must be a DNS-compatible name of at most 63 characters: {value!r}\")\n\
+          \        return value\n\n    def normalize_model_dir(value: str, field_name:\
+          \ str) -> str:\n        value = value.strip()\n        if value.startswith(\"\
+          pvc://\"):\n            claim, separator, path = value.removeprefix(\"pvc://\"\
+          ).partition(\"/\")\n            if claim != model_cache_pvc or not separator:\n\
+          \                raise ValueError(f\"{field_name} PVC URI must reference\
+          \ model_cache_pvc {model_cache_pvc!r}\")\n            value = path\n   \
+          \     elif \"://\" in value:\n            raise ValueError(f\"{field_name}\
+          \ must be a relative PVC directory or pvc:// URI: {value!r}\")\n       \
+          \ if value.startswith(\"/\"):\n            raise ValueError(f\"{field_name}\
+          \ must be a non-empty relative PVC directory: {value!r}\")\n        value\
+          \ = value.strip(\"/\")\n        parts = value.split(\"/\") if value else\
+          \ []\n        if not value or any(part in {\"\", \".\", \"..\"} for part\
+          \ in parts):\n            raise ValueError(f\"{field_name} must be a non-empty\
+          \ relative PVC directory: {value!r}\")\n        return value\n\n    namespace\
+          \ = validate_dns_label(namespace, \"namespace\")\n    endpoint_name = validate_dns_label(endpoint_name,\
+          \ \"endpoint_name\")\n    model_cache_pvc = validate_dns_label(model_cache_pvc,\
+          \ \"model_cache_pvc\")\n    verifier_model_dir = normalize_model_dir(verifier_model_dir,\
+          \ \"verifier_model_dir\")\n    draft_model_dir = normalize_model_dir(draft_model_dir,\
+          \ \"draft_model_dir\")\n    runtime_image = runtime_image.strip()\n    if\
+          \ not runtime_image:\n        raise ValueError(\"runtime_image must not\
+          \ be empty\")\n    if min_replicas < 1 or max_replicas < min_replicas:\n\
+          \        raise ValueError(\"replica settings must satisfy 1 <= min_replicas\
+          \ <= max_replicas\")\n    if gpu_count < 1:\n        raise ValueError(\"\
+          gpu_count must be at least 1 for the CUDA serving runtime\")\n    if draft_tensor_parallel_size\
+          \ < 1 or draft_tensor_parallel_size not in (1, gpu_count):\n        raise\
+          \ ValueError(\"draft_tensor_parallel_size must be 1 or equal to gpu_count\"\
+          )\n    if max_model_len < 1 or num_speculative_tokens < 1 or max_num_seqs\
+          \ < 1:\n        raise ValueError(\"max_model_len, num_speculative_tokens,\
+          \ and max_num_seqs must be positive\")\n    if not 0 < gpu_memory_utilization\
+          \ <= 1:\n        raise ValueError(\"gpu_memory_utilization must be greater\
+          \ than 0 and at most 1\")\n\n    serving_runtime_name = f\"{endpoint_name}-runtime\"\
+          \n\n    config.load_incluster_config()\n    custom_api = kclient.CustomObjectsApi()\n\
+          \    apps_api = kclient.AppsV1Api()\n\n    _hp_namespace = \"redhat-ods-applications\"\
+          \n    hp_annotation_keys = (\n        \"opendatahub.io/hardware-profile-name\"\
+          ,\n        \"opendatahub.io/hardware-profile-namespace\",\n        \"opendatahub.io/hardware-profile-resource-version\"\
+          ,\n    )\n    hp_resource_version = \"\"\n    if hardware_profile_name:\n\
+          \        try:\n            hp = custom_api.get_namespaced_custom_object(\n\
+          \                group=\"infrastructure.opendatahub.io\",\n            \
+          \    version=\"v1\",\n                namespace=_hp_namespace,\n       \
+          \         plural=\"hardwareprofiles\",\n                name=hardware_profile_name,\n\
+          \            )\n            hp_resource_version = hp.get(\"metadata\", {}).get(\"\
+          resourceVersion\", \"\")\n            print(f\"Found HardwareProfile '{hardware_profile_name}'\
+          \ (rv={hp_resource_version}).\")\n        except kclient.rest.ApiException\
+          \ as error:\n            if error.status != 404:\n                raise\n\
+          \            raise ValueError(\n                f\"HardwareProfile '{hardware_profile_name}'\
+          \ was not found in namespace '{_hp_namespace}'. \"\n                'Use\
+          \ an existing profile or set hardware_profile_name=\"\" to skip the HardwareProfile.'\n\
+          \            ) from error\n\n    model_root = \"/mnt/models\"\n    verifier_model_path\
+          \ = f\"{model_root}/{verifier_model_dir}\"\n    draft_model_path = f\"{model_root}/{draft_model_dir}\"\
+          \n    speculative_config = {\n        \"method\": \"eagle3\",\n        \"\
+          model\": draft_model_path,\n        \"draft_tensor_parallel_size\": draft_tensor_parallel_size,\n\
+          \        \"num_speculative_tokens\": num_speculative_tokens,\n    }\n  \
+          \  runtime_args = [\n        \"--port=8080\",\n        f\"--model={verifier_model_path}\"\
+          ,\n        \"--speculative-config\",\n        json.dumps(speculative_config,\
+          \ separators=(\",\", \":\")),\n        \"--served-model-name={{.Name}}\"\
+          ,\n        f\"--max-model-len={max_model_len}\",\n        f\"--gpu-memory-utilization={gpu_memory_utilization}\"\
+          ,\n        f\"--max-num-seqs={max_num_seqs}\",\n        f\"--tensor-parallel-size={gpu_count}\"\
+          ,\n    ]\n    if trust_remote_code:\n        runtime_args.append(\"--trust-remote-code\"\
+          )\n\n    serving_runtime = {\n        \"apiVersion\": \"serving.kserve.io/v1alpha1\"\
+          ,\n        \"kind\": \"ServingRuntime\",\n        \"metadata\": {\n    \
+          \        \"name\": serving_runtime_name,\n            \"namespace\": namespace,\n\
+          \            \"annotations\": {\n                \"opendatahub.io/apiProtocol\"\
+          : \"REST\",\n                \"opendatahub.io/recommended-accelerators\"\
+          : '[\"nvidia.com/gpu\"]',\n                \"opendatahub.io/runtime-version\"\
+          : \"v0.24.0\",\n                \"opendatahub.io/serving-runtime-scope\"\
+          : \"global\",\n                \"opendatahub.io/template-display-name\"\
+          : \"vLLM NVIDIA GPU ServingRuntime for KServe\",\n                \"opendatahub.io/template-name\"\
+          : \"vllm-cuda-runtime-template\",\n                \"openshift.io/display-name\"\
+          : \"vLLM NVIDIA GPU ServingRuntime for KServe\",\n            },\n     \
+          \       \"labels\": {\"opendatahub.io/dashboard\": \"true\"},\n        },\n\
+          \        \"spec\": {\n            \"annotations\": {\n                \"\
+          opendatahub.io/kserve-runtime\": \"vllm\",\n                \"prometheus.io/path\"\
+          : \"/metrics\",\n                \"prometheus.io/port\": \"8080\",\n   \
+          \         },\n            \"multiModel\": False,\n            \"supportedModelFormats\"\
+          : [{\"name\": \"vLLM\", \"autoSelect\": True}],\n            \"containers\"\
+          : [\n                {\n                    \"name\": \"kserve-container\"\
+          ,\n                    \"image\": runtime_image,\n                    \"\
+          command\": [\"python3\", \"-m\", \"vllm.entrypoints.openai.api_server\"\
+          ],\n                    \"args\": runtime_args,\n                    \"\
+          env\": [\n                        {\"name\": \"HOME\", \"value\": \"/tmp\"\
+          },\n                        {\"name\": \"USER\", \"value\": \"default\"\
+          },\n                        {\"name\": \"LOGNAME\", \"value\": \"default\"\
+          },\n                        {\"name\": \"USERNAME\", \"value\": \"default\"\
+          },\n                        {\"name\": \"HF_HOME\", \"value\": \"/tmp/hf_home\"\
+          },\n                        {\"name\": \"HUGGINGFACE_HUB_CACHE\", \"value\"\
+          : \"/tmp/hf_home\"},\n                        {\"name\": \"XDG_CACHE_HOME\"\
+          , \"value\": \"/tmp/.cache\"},\n                        {\"name\": \"TORCHINDUCTOR_CACHE_DIR\"\
+          , \"value\": \"/tmp/torchinductor\"},\n                        {\"name\"\
+          : \"HF_HUB_OFFLINE\", \"value\": \"1\"},\n                        {\"name\"\
+          : \"TRANSFORMERS_OFFLINE\", \"value\": \"1\"},\n                       \
+          \ {\"name\": \"VLLM_ATTENTION_BACKEND\", \"value\": \"TRITON_ATTN\"},\n\
+          \                        {\"name\": \"PYTORCH_CUDA_ALLOC_CONF\", \"value\"\
+          : \"expandable_segments:True\"},\n                    ],\n             \
+          \       \"ports\": [{\"containerPort\": 8080, \"protocol\": \"TCP\"}],\n\
+          \                }\n            ],\n        },\n    }\n\n    def upsert_custom_object(group:\
+          \ str, version: str, plural: str, name: str, body: dict) -> None:\n    \
+          \    try:\n            existing = custom_api.get_namespaced_custom_object(\n\
+          \                group=group,\n                version=version,\n      \
+          \          namespace=namespace,\n                plural=plural,\n      \
+          \          name=name,\n            )\n        except kclient.rest.ApiException\
+          \ as error:\n            if error.status != 404:\n                raise\n\
+          \            custom_api.create_namespaced_custom_object(\n             \
+          \   group=group,\n                version=version,\n                namespace=namespace,\n\
+          \                plural=plural,\n                body=body,\n          \
+          \  )\n            print(f\"Created {plural} '{name}'.\")\n        else:\n\
+          \            patch_body = copy.deepcopy(body)\n            if plural ==\
+          \ \"inferenceservices\":\n                existing_annotations = existing.get(\"\
+          metadata\", {}).get(\"annotations\", {}) or {}\n                desired_annotations\
+          \ = patch_body[\"metadata\"][\"annotations\"]\n                if \"serving.kserve.io/stop\"\
+          \ in existing_annotations:\n                    desired_annotations[\"serving.kserve.io/stop\"\
+          ] = None\n                for key in hp_annotation_keys:\n             \
+          \       if key in existing_annotations and key not in desired_annotations:\n\
+          \                        desired_annotations[key] = None\n            custom_api.patch_namespaced_custom_object(\n\
+          \                group=group,\n                version=version,\n      \
+          \          namespace=namespace,\n                plural=plural,\n      \
+          \          name=name,\n                body=patch_body,\n            )\n\
+          \            print(f\"Updated {plural} '{name}'.\")\n\n    upsert_custom_object(\n\
+          \        group=\"serving.kserve.io\",\n        version=\"v1alpha1\",\n \
+          \       plural=\"servingruntimes\",\n        name=serving_runtime_name,\n\
+          \        body=serving_runtime,\n    )\n\n    gpu_resources = {\"nvidia.com/gpu\"\
+          : str(gpu_count)}\n    resources = {\n        \"requests\": {\"cpu\": cpu_requests,\
+          \ \"memory\": memory_requests, **gpu_resources},\n        \"limits\": {\"\
+          cpu\": cpu_limits, \"memory\": memory_limits, **gpu_resources},\n    }\n\
+          \    isvc_annotations = {\n        \"serving.kserve.io/deploymentMode\"\
+          : \"RawDeployment\",\n        \"security.opendatahub.io/enable-auth\": str(enable_auth).lower(),\n\
+          \        \"opendatahub.io/model-type\": \"generative\",\n        \"opendatahub.io/genai-use-case\"\
+          : \"speculative-decoding\",\n        \"openshift.io/display-name\": endpoint_name,\n\
+          \    }\n    if hardware_profile_name:\n        isvc_annotations.update(\n\
+          \            {\n                \"opendatahub.io/hardware-profile-name\"\
+          : hardware_profile_name,\n                \"opendatahub.io/hardware-profile-namespace\"\
+          : _hp_namespace,\n            }\n        )\n        if hp_resource_version:\n\
+          \            isvc_annotations[\"opendatahub.io/hardware-profile-resource-version\"\
+          ] = hp_resource_version\n\n    isvc = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\"\
+          ,\n        \"kind\": \"InferenceService\",\n        \"metadata\": {\n  \
+          \          \"name\": endpoint_name,\n            \"namespace\": namespace,\n\
+          \            \"annotations\": isvc_annotations,\n            \"labels\"\
+          : {\n                \"opendatahub.io/dashboard\": \"true\",\n         \
+          \       \"opendatahub.io/genai-asset\": \"true\",\n                \"networking.kserve.io/visibility\"\
+          : \"exposed\" if enable_external_route else \"cluster-local\",\n       \
+          \     },\n        },\n        \"spec\": {\n            \"predictor\": {\n\
+          \                \"minReplicas\": min_replicas,\n                \"maxReplicas\"\
+          : max_replicas,\n                \"automountServiceAccountToken\": False,\n\
+          \                \"deploymentStrategy\": {\n                    \"type\"\
+          : \"RollingUpdate\",\n                    \"rollingUpdate\": {\"maxSurge\"\
+          : 0, \"maxUnavailable\": 1},\n                },\n                \"model\"\
+          : {\n                    \"modelFormat\": {\"name\": \"vLLM\"},\n      \
+          \              \"name\": \"\",\n                    \"runtime\": serving_runtime_name,\n\
+          \                    \"storageUri\": f\"pvc://{model_cache_pvc}\",\n   \
+          \                 \"resources\": resources,\n                },\n      \
+          \      }\n        },\n    }\n\n    # Runtime-only changes must also change\
+          \ the predictor pod template. KServe\n    # propagates predictor annotations\
+          \ to the Deployment template; a stable hash\n    # links its completed rollout\
+          \ to this configuration without restarting reruns.\n    config_hash_annotation\
+          \ = \"pipelines.kubeflow.org/serving-config-hash\"\n    desired_config =\
+          \ {\n        \"runtime\": serving_runtime[\"spec\"],\n        \"predictor\"\
+          : isvc[\"spec\"][\"predictor\"],\n        \"annotations\": isvc_annotations,\n\
+          \        \"visibility\": isvc[\"metadata\"][\"labels\"][\"networking.kserve.io/visibility\"\
+          ],\n    }\n    config_hash = hashlib.sha256(json.dumps(desired_config, sort_keys=True,\
+          \ separators=(\",\", \":\")).encode()).hexdigest()\n    isvc[\"spec\"][\"\
+          predictor\"][\"annotations\"] = {config_hash_annotation: config_hash}\n\n\
+          \    upsert_custom_object(\n        group=\"serving.kserve.io\",\n     \
+          \   version=\"v1beta1\",\n        plural=\"inferenceservices\",\n      \
+          \  name=endpoint_name,\n        body=isvc,\n    )\n\n    def read_custom_object(group:\
+          \ str, version: str, plural: str) -> dict:\n        try:\n            return\
+          \ custom_api.get_namespaced_custom_object(\n                group=group,\n\
+          \                version=version,\n                namespace=namespace,\n\
+          \                plural=plural,\n                name=endpoint_name,\n \
+          \           )\n        except kclient.rest.ApiException as error:\n    \
+          \        if error.status == 404:\n                return {}\n          \
+          \  if error.status == 403:\n                raise RuntimeError(\n      \
+          \              f\"Permission denied reading '{endpoint_name}' in namespace\
+          \ '{namespace}'. \"\n                    f\"The pipeline ServiceAccount\
+          \ needs get permission for {plural}.{group}.\"\n                ) from error\n\
+          \            raise\n\n    predictor_name = f\"{endpoint_name}-predictor\"\
+          \n    runtime_container = serving_runtime[\"spec\"][\"containers\"][0]\n\
+          \    expected_args = [arg.replace(\"{{.Name}}\", endpoint_name) for arg\
+          \ in runtime_args]\n    deadline = time.monotonic() + 30 * 60\n    last_status\
+          \ = \"waiting for predictor Deployment\"\n    print(\"Waiting for the requested\
+          \ predictor rollout and InferenceService readiness...\")\n    while time.monotonic()\
+          \ < deadline:\n        obj = read_custom_object(\"serving.kserve.io\", \"\
+          v1beta1\", \"inferenceservices\")\n        isvc_status = obj.get(\"status\"\
+          , {}) or {}\n        conditions = isvc_status.get(\"conditions\", []) or\
+          \ []\n        isvc_ready = any(\n            condition.get(\"type\") ==\
+          \ \"Ready\" and condition.get(\"status\") == \"True\" for condition in conditions\n\
+          \        )\n        deployment = None\n        try:\n            deployment\
+          \ = apps_api.read_namespaced_deployment(name=predictor_name, namespace=namespace)\n\
+          \        except kclient.rest.ApiException as error:\n            if error.status\
+          \ == 403:\n                raise RuntimeError(\n                    f\"\
+          Permission denied reading Deployment '{predictor_name}' in namespace '{namespace}'.\
+          \ \"\n                    \"The pipeline ServiceAccount needs get permission\
+          \ for deployments.apps.\"\n                ) from error\n            if\
+          \ error.status != 404:\n                raise\n\n        rollout_ready =\
+          \ False\n        last_status = f\"predictor Deployment not yet published;\
+          \ InferenceService Ready={isvc_ready}\"\n        if deployment is not None\
+          \ and deployment.spec is not None and deployment.status is not None:\n \
+          \           template_metadata = deployment.spec.template.metadata\n    \
+          \        template_annotations = (template_metadata.annotations or {}) if\
+          \ template_metadata else {}\n            matches_config = template_annotations.get(config_hash_annotation)\
+          \ == config_hash\n            template_spec = deployment.spec.template.spec\n\
+          \            container = (\n                next((item for item in (template_spec.containers\
+          \ or []) if item.name == \"kserve-container\"), None)\n                if\
+          \ template_spec\n                else None\n            )\n            #\
+          \ KServe may observe the new ISVC hash before its separate runtime cache\n\
+          \            # catches up. Require the rendered container configuration\
+          \ as well.\n            matches_runtime = (\n                container is\
+          \ not None\n                and container.image == runtime_image\n     \
+          \           and container.command == runtime_container[\"command\"]\n  \
+          \              and container.args == expected_args\n            )\n    \
+          \        generation = deployment.metadata.generation or 0\n            status\
+          \ = deployment.status\n            observed = generation > 0 and (status.observed_generation\
+          \ or 0) >= generation\n            desired_replicas = deployment.spec.replicas\
+          \ or 0\n            last_status = (\n                f\"predictor config\
+          \ matches={matches_config}, runtime matches={matches_runtime}, \"\n    \
+          \            f\"generation={generation}, observedGeneration={status.observed_generation},\
+          \ \"\n                f\"replicas={status.replicas}, updated={status.updated_replicas},\
+          \ \"\n                f\"available={status.available_replicas}, desired={desired_replicas};\
+          \ \"\n                f\"InferenceService Ready={isvc_ready}\"\n       \
+          \     )\n            if matches_config and matches_runtime and observed:\n\
+          \                for condition in status.conditions or []:\n           \
+          \         if (\n                        condition.type == \"Progressing\"\
+          \n                        and condition.status == \"False\"\n          \
+          \              and condition.reason == \"ProgressDeadlineExceeded\"\n  \
+          \                  ):\n                        raise RuntimeError(\n   \
+          \                         f\"Predictor Deployment '{predictor_name}' failed\
+          \ its requested rollout: \"\n                            f\"{condition.message\
+          \ or condition.reason}. \"\n                            f\"Inspect with:\
+          \ oc describe deployment {predictor_name} -n {namespace}\"\n           \
+          \             )\n                rollout_ready = (\n                   \
+          \ desired_replicas > 0\n                    and (status.updated_replicas\
+          \ or 0) == desired_replicas\n                    and (status.available_replicas\
+          \ or 0) >= desired_replicas\n                    and (status.replicas or\
+          \ 0) == desired_replicas\n                )\n\n        if rollout_ready\
+          \ and isvc_ready:\n            if enable_external_route:\n             \
+          \   route = read_custom_object(\"route.openshift.io\", \"v1\", \"routes\"\
+          )\n                route_spec = route.get(\"spec\", {}) or {}\n        \
+          \        host = route_spec.get(\"host\", \"\")\n                admitted\
+          \ = any(\n                    ingress.get(\"host\") == host\n          \
+          \          and any(\n                        condition.get(\"type\") ==\
+          \ \"Admitted\" and condition.get(\"status\") == \"True\"\n             \
+          \           for condition in ingress.get(\"conditions\", []) or []\n   \
+          \                 )\n                    for ingress in (route.get(\"status\"\
+          , {}) or {}).get(\"ingress\", []) or []\n                )\n           \
+          \     expected_port = \"https\" if enable_auth else \"http\"\n         \
+          \       expected_tls = \"reencrypt\" if enable_auth else \"edge\"\n    \
+          \            route_matches = (\n                    route_spec.get(\"to\"\
+          , {}).get(\"name\") == predictor_name\n                    and route_spec.get(\"\
+          port\", {}).get(\"targetPort\") == expected_port\n                    and\
+          \ route_spec.get(\"tls\", {}).get(\"termination\") == expected_tls\n   \
+          \             )\n                if host and admitted and route_matches:\n\
+          \                    endpoint = f\"https://{host}/v1\"\n               \
+          \     print(f\"InferenceService ready (external route): {endpoint}\")\n\
+          \                    return endpoint\n                last_status = (\n\
+          \                    f\"waiting for platform Route '{endpoint_name}': host={host!r},\
+          \ admitted={admitted}, \"\n                    f\"backend/auth configuration\
+          \ matches={route_matches} \"\n                    f\"(expected {predictor_name},\
+          \ {expected_port}, {expected_tls})\"\n                )\n            else:\n\
+          \                url = (isvc_status.get(\"address\", {}) or {}).get(\"url\"\
+          , \"\")\n                parsed = urlparse(url.strip()) if url else None\n\
+          \                if parsed and parsed.scheme and parsed.netloc:\n      \
+          \              endpoint = f\"{parsed.scheme}://{parsed.netloc}/v1\"\n  \
+          \                  print(f\"InferenceService ready: {endpoint}\")\n    \
+          \                return endpoint\n                last_status = \"predictor\
+          \ rollout complete; waiting for InferenceService internal URL publication\"\
+          \n\n        time.sleep(min(30, max(0, deadline - time.monotonic())))\n\n\
+          \    route_diagnostic = f\"; oc describe route {endpoint_name} -n {namespace}\"\
+          \ if enable_external_route else \"\"\n    raise TimeoutError(\n        f\"\
+          InferenceService '{endpoint_name}' did not become ready within 30 minutes.\
+          \ Last status: {last_status}. \"\n        f\"Inspect with: oc describe inferenceservice\
+          \ {endpoint_name} -n {namespace}; \"\n        f\"oc describe deployment\
+          \ {predictor_name} -n {namespace}{route_diagnostic}\"\n    )\n\n"
+        image: registry.access.redhat.com/ubi9/python-311:latest
+pipelineInfo:
+  description: Cache a verifier on a shared PVC, train an Eagle3 draft in one online
+    Speculator Trainer job with a managed vLLM sidecar, evaluate it, optionally register
+    it, and serve it.
+  name: speculator-online-pipeline
+root:
+  dag:
+    tasks:
+      download-model:
+        cachingOptions: {}
+        componentRef:
+          name: comp-download-model
+        inputs:
+          parameters:
+            download_enabled:
+              componentInputParameter: p04_download_model
+            existing_model_path:
+              componentInputParameter: p03_verifier_model_pvc
+            model_cache_mount:
+              runtimeValue:
+                constant: /mnt/persistent/models
+            model_cache_pvc:
+              componentInputParameter: p01_persistent_pvc
+            model_name:
+              componentInputParameter: p02_verifier_model
+            output_prefix:
+              runtimeValue:
+                constant: models
+        taskInfo:
+          name: download-model
+      evaluate-draft-model:
+        cachingOptions: {}
+        componentRef:
+          name: comp-evaluate-draft-model
+        dependentTasks:
+        - download-model
+        - online-draft-model-training
+        inputs:
+          parameters:
+            draft_model_path:
+              runtimeValue:
+                constant: /mnt/persistent/final_model
+            evaluation_dataset_pvc:
+              componentInputParameter: p01_persistent_pvc
+            evaluation_dataset_uri:
+              componentInputParameter: p07_evaluation_dataset_uri
+            evaluation_gpu_memory_utilization:
+              componentInputParameter: p41_evaluation_gpu_memory_utilization
+            evaluation_max_samples:
+              componentInputParameter: p37_evaluation_max_samples
+            evaluation_max_tokens:
+              componentInputParameter: p38_evaluation_max_tokens
+            evaluation_num_speculative_tokens:
+              componentInputParameter: p40_evaluation_num_speculative_tokens
+            evaluation_sample_seed:
+              runtimeValue:
+                constant: 42.0
+            evaluation_speculator_type:
+              runtimeValue:
+                constant: eagle3
+            evaluation_startup_timeout_seconds:
+              componentInputParameter: p42_evaluation_startup_timeout_seconds
+            evaluation_temperature:
+              componentInputParameter: p39_evaluation_temperature
+            verifier_model:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: download-model
+        taskInfo:
+          name: evaluate-draft-model
+      kubeflow-model-registry:
+        cachingOptions: {}
+        componentRef:
+          name: comp-kubeflow-model-registry
+        dependentTasks:
+        - evaluate-draft-model
+        - online-draft-model-training
+        inputs:
+          artifacts:
+            eval_metrics:
+              taskOutputArtifact:
+                outputArtifactKey: output_metrics
+                producerTask: evaluate-draft-model
+            eval_results:
+              taskOutputArtifact:
+                outputArtifactKey: output_results
+                producerTask: evaluate-draft-model
+            input_metrics:
+              taskOutputArtifact:
+                outputArtifactKey: output_metrics
+                producerTask: online-draft-model-training
+            input_model:
+              taskOutputArtifact:
+                outputArtifactKey: output_model
+                producerTask: online-draft-model-training
+          parameters:
+            model_description:
+              runtimeValue:
+                constant: Speculator draft model trained with online mode.
+            model_name:
+              componentInputParameter: p45_model_registry_name
+            model_pvc_name:
+              componentInputParameter: p01_persistent_pvc
+            model_version:
+              componentInputParameter: p46_model_registry_version
+            pvc_mount_path:
+              runtimeValue:
+                constant: /mnt/persistent
+            registry_address:
+              componentInputParameter: p43_model_registry_address
+            registry_port:
+              componentInputParameter: p44_model_registry_port
+            shared_log_file:
+              runtimeValue:
+                constant: pipeline_log.txt
+            source_namespace:
+              runtimeValue:
+                constant: ''
+            source_pipeline_name:
+              runtimeValue:
+                constant: speculator-online-pipeline
+            source_pipeline_run_id:
+              runtimeValue:
+                constant: '{{$.pipeline_job_uuid}}'
+            source_pipeline_run_name:
+              runtimeValue:
+                constant: '{{$.pipeline_job_name}}'
+        taskInfo:
+          name: kubeflow-model-registry
+      online-draft-model-training:
+        cachingOptions: {}
+        componentRef:
+          name: comp-online-draft-model-training
+        dependentTasks:
+        - download-model
+        inputs:
+          parameters:
+            data_extraction_concurrency:
+              componentInputParameter: p11_data_extraction_concurrency
+            data_extraction_max_samples:
+              componentInputParameter: p09_data_extraction_max_samples
+            data_extraction_regenerate_responses:
+              componentInputParameter: p10_data_extraction_regenerate_responses
+            dataset_name:
+              componentInputParameter: p06_dataset_name
+            download_model:
+              componentInputParameter: p04_download_model
+            output_dir:
+              componentInputParameter: p12_output_dir
+            packages_to_install:
+              componentInputParameter: p35_packages_to_install
+            persistent_mount_path:
+              runtimeValue:
+                constant: /mnt/persistent
+            persistent_pvc:
+              componentInputParameter: p01_persistent_pvc
+            pvc_path:
+              runtimeValue:
+                constant: '{{$.workspace_path}}'
+            speculator_type:
+              runtimeValue:
+                constant: eagle3
+            target_layer_ids:
+              componentInputParameter: p05_target_layer_ids
+            total_seq_len:
+              componentInputParameter: p13_total_seq_len
+            training_checkpoint_freq:
+              runtimeValue:
+                constant: 1.0
+            training_draft_vocab_size:
+              componentInputParameter: p16_training_draft_vocab_size
+            training_embed_requires_grad:
+              componentInputParameter: p21_training_embed_requires_grad
+            training_envs:
+              componentInputParameter: p36_job_envs
+            training_epochs:
+              componentInputParameter: p14_training_epochs
+            training_hidden_states_dtype:
+              componentInputParameter: p22_training_hidden_states_dtype
+            training_log_freq:
+              runtimeValue:
+                constant: 1.0
+            training_lr:
+              componentInputParameter: p15_training_lr
+            training_norm_before_fc:
+              componentInputParameter: p20_training_norm_before_fc
+            training_norm_before_residual:
+              componentInputParameter: p19_training_norm_before_residual
+            training_num_layers:
+              componentInputParameter: p17_training_num_layers
+            training_resource_cpu:
+              componentInputParameter: p28_training_resource_cpu
+            training_resource_gpu:
+              componentInputParameter: p29_training_resource_gpu
+            training_resource_memory:
+              componentInputParameter: p30_training_resource_memory
+            training_resume_from_checkpoint:
+              componentInputParameter: p27_training_resume_from_checkpoint
+            training_runtime:
+              componentInputParameter: p34_job_runtime
+            training_save_best:
+              componentInputParameter: p26_training_save_best
+            training_scheduler_num_cosine_cycles:
+              runtimeValue:
+                constant: 0.5
+            training_scheduler_total_steps:
+              componentInputParameter: p25_training_scheduler_total_steps
+            training_scheduler_type:
+              componentInputParameter: p23_training_scheduler_type
+            training_scheduler_warmup_steps:
+              componentInputParameter: p24_training_scheduler_warmup_steps
+            training_ttt_steps:
+              componentInputParameter: p18_training_test_time_steps
+            verifier_model:
+              componentInputParameter: p02_verifier_model
+            verifier_model_pvc:
+              componentInputParameter: p03_verifier_model_pvc
+            vllm_gpu_memory_utilization:
+              componentInputParameter: p32_vllm_gpu_memory_utilization
+            vllm_readiness_timeout_minutes:
+              componentInputParameter: p33_vllm_readiness_timeout_minutes
+            vllm_resource_gpu:
+              runtimeValue:
+                constant: 1.0
+            vllm_resource_memory:
+              componentInputParameter: p31_vllm_resource_memory
+        taskInfo:
+          name: online-draft-model-training
+      speculative-decoding-serving:
+        cachingOptions: {}
+        componentRef:
+          name: comp-speculative-decoding-serving
+        dependentTasks:
+        - download-model
+        - kubeflow-model-registry
+        inputs:
+          parameters:
+            draft_model_dir:
+              runtimeValue:
+                constant: final_model
+            endpoint_name:
+              componentInputParameter: p47_serving_endpoint_name
+            gpu_memory_utilization:
+              componentInputParameter: p41_evaluation_gpu_memory_utilization
+            max_model_len:
+              componentInputParameter: p13_total_seq_len
+            model_cache_pvc:
+              componentInputParameter: p01_persistent_pvc
+            namespace:
+              componentInputParameter: p08_serving_namespace
+            num_speculative_tokens:
+              componentInputParameter: p40_evaluation_num_speculative_tokens
+            runtime_image:
+              componentInputParameter: p48_serving_runtime_image
+            verifier_model_dir:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: download-model
+        taskInfo:
+          name: speculative-decoding-serving
+  inputDefinitions:
+    parameters:
+      p01_persistent_pvc:
+        description: 'Required name of the existing ReadWriteMany PVC in the pipeline
+          namespace. It stores
+
+          the downloaded verifier, Trainer outputs, and final draft; KServe must also
+          access it in
+
+          ``p08_serving_namespace``. The PVC is mounted at ``/mnt/persistent``.'
+        parameterType: STRING
+      p02_verifier_model:
+        defaultValue: ''
+        description: 'Optional HuggingFace model ID used for downloading or resolving
+          the default cached
+
+          directory. Required when downloading or when no existing PVC path is supplied.'
+        isOptional: true
+        parameterType: STRING
+      p03_verifier_model_pvc:
+        defaultValue: ''
+        description: 'Optional existing verifier directory on the shared PVC, as a
+          relative path or matching
+
+          ``pvc://`` URI. Used when ``p04_download_model`` is false. When empty and
+          downloads are disabled, the
+
+          default cached directory derived from ``p02_verifier_model`` is used.'
+        isOptional: true
+        parameterType: STRING
+      p04_download_model:
+        defaultValue: false
+        description: 'Download the model specified by ``p02_verifier_model`` to the
+          shared PVC. Defaults to
+
+          false; when true, the model ID is downloaded before training.'
+        isOptional: true
+        parameterType: BOOLEAN
+      p05_target_layer_ids:
+        description: 'Required in online mode. Supply four comma-separated layer IDs
+          matching the verifier.
+
+          The online Trainer receives the cached model as a PVC URI and cannot auto-detect
+          layer IDs from the
+
+          PVC-backed model config; this input must be populated.'
+        parameterType: STRING
+      p06_dataset_name:
+        description: 'Required built-in dataset name or PVC URI to a JSON/JSONL file.
+          Supported built-ins are
+
+          ``magpie`` (Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered), ``ultrachat``
+
+          (HuggingFaceH4/ultrachat_200k), and ``gsm8k`` (openai/gsm8k). Local JSON/JSONL
+          paths are converted to
+
+          Trainer PVC URIs; ``pvc://`` URIs must reference ``p01_persistent_pvc``.'
+        parameterType: STRING
+      p07_evaluation_dataset_uri:
+        description: 'Required Hugging Face dataset ID or local JSON/JSONL file. A
+          ``pvc://`` URI must
+
+          reference ``p01_persistent_pvc``. Avoid leading or trailing whitespace.
+          Evaluation receives the optional
+
+          ``hf-token`` secret but not Kubernetes Trainer credentials.'
+        parameterType: STRING
+      p08_serving_namespace:
+        description: 'Required KServe namespace; must access the PVC. The pipeline
+          ServiceAccount needs
+
+          permission to manage the ServingRuntime and InferenceService and read the
+          predictor Deployment.'
+        parameterType: STRING
+      p09_data_extraction_max_samples:
+        defaultValue: 0.0
+        description: 'Maximum training examples extracted by the managed vLLM sidecar.
+          Set to ``0``
+
+          to process the full dataset.'
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p10_data_extraction_regenerate_responses:
+        defaultValue: false
+        description: 'Regenerate assistant responses with the verifier instead of
+          using
+
+          original responses. Supported only for the built-in datasets.'
+        isOptional: true
+        parameterType: BOOLEAN
+      p11_data_extraction_concurrency:
+        defaultValue: 1.0
+        description: 'Managed vLLM request concurrency and training ``datagen_concurrency``;
+
+          affects training data-loading throughput. Use ``1`` on shared or NFS PVCs.'
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p12_output_dir:
+        defaultValue: speculator-output
+        description: 'PVC-relative directory for Trainer outputs and checkpoints.
+          The final draft is copied to
+
+          ``final_model`` at the PVC root.'
+        isOptional: true
+        parameterType: STRING
+      p13_total_seq_len:
+        defaultValue: 2048.0
+        description: Positive maximum sequence length used for extraction, training,
+          and serving.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p14_training_epochs:
+        defaultValue: 3.0
+        description: Number of training epochs.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p15_training_lr:
+        defaultValue: 0.0001
+        description: Learning rate for draft-model training.
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      p16_training_draft_vocab_size:
+        defaultValue: 0.0
+        description: Draft vocabulary size. ``0`` lets the Trainer SDK derive it.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p17_training_num_layers:
+        defaultValue: 1.0
+        description: Number of layers in the draft model.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p18_training_test_time_steps:
+        defaultValue: 1.0
+        description: Number of test-time training steps configured for Speculator.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p19_training_norm_before_residual:
+        defaultValue: true
+        description: Apply normalization before the residual connection.
+        isOptional: true
+        parameterType: BOOLEAN
+      p20_training_norm_before_fc:
+        defaultValue: false
+        description: Apply normalization before the fully connected layer.
+        isOptional: true
+        parameterType: BOOLEAN
+      p21_training_embed_requires_grad:
+        defaultValue: false
+        description: Whether draft embedding weights are trainable.
+        isOptional: true
+        parameterType: BOOLEAN
+      p22_training_hidden_states_dtype:
+        defaultValue: bfloat16
+        description: Hidden-state dtype; it must match the verifier model.
+        isOptional: true
+        parameterType: STRING
+      p23_training_scheduler_type:
+        defaultValue: linear
+        description: 'Learning-rate scheduler: ``linear``, ``cosine``, or ``none``.'
+        isOptional: true
+        parameterType: STRING
+      p24_training_scheduler_warmup_steps:
+        defaultValue: 0.0
+        description: Warmup steps. ``0`` lets the SDK calculate them.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p25_training_scheduler_total_steps:
+        defaultValue: 0.0
+        description: Total scheduler steps. ``0`` lets the SDK calculate them.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p26_training_save_best:
+        defaultValue: false
+        description: Save the best checkpoint by validation loss.
+        isOptional: true
+        parameterType: BOOLEAN
+      p27_training_resume_from_checkpoint:
+        defaultValue: false
+        description: Resume from a saved checkpoint when supported by the runtime.
+        isOptional: true
+        parameterType: BOOLEAN
+      p28_training_resource_cpu:
+        defaultValue: '4'
+        description: CPU request for the main Trainer worker.
+        isOptional: true
+        parameterType: STRING
+      p29_training_resource_gpu:
+        defaultValue: 1.0
+        description: 'Number of GPUs requested for the main Trainer worker. The managed
+          vLLM sidecar
+
+          always requests one GPU, so the total is ``p29_training_resource_gpu + 1``.'
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p30_training_resource_memory:
+        defaultValue: 64Gi
+        description: Memory request for the main Trainer worker.
+        isOptional: true
+        parameterType: STRING
+      p31_vllm_resource_memory:
+        defaultValue: 96Gi
+        description: Memory request for the managed vLLM sidecar. The sidecar always
+          requests one GPU.
+        isOptional: true
+        parameterType: STRING
+      p32_vllm_gpu_memory_utilization:
+        defaultValue: 0.9
+        description: 'GPU memory fraction for the managed vLLM sidecar, greater than
+          ``0`` and
+
+          at most ``1.0``.'
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      p33_vllm_readiness_timeout_minutes:
+        defaultValue: 60.0
+        description: Maximum wait in minutes for the managed vLLM sidecar to become
+          ready.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p34_job_runtime:
+        defaultValue: vllm-extract-cuda
+        description: ClusterTrainingRuntime for the online Trainer with vLLM extraction.
+        isOptional: true
+        parameterType: STRING
+      p35_packages_to_install:
+        defaultValue: ''
+        description: Comma-separated Python packages installed in the online Trainer
+          job.
+        isOptional: true
+        parameterType: STRING
+      p36_job_envs:
+        defaultValue: NCCL_DEBUG=INFO,PYTHONUNBUFFERED=1
+        description: 'Comma-separated ``KEY=VALUE`` environment overrides for the
+          Trainer job. Set ``PIP_INDEX_URL``
+
+          or ``PIP_EXTRA_INDEX_URL`` here to select a custom index for ``p35_packages_to_install``.'
+        isOptional: true
+        parameterType: STRING
+      p37_evaluation_max_samples:
+        defaultValue: 80.0
+        description: Maximum GuideLLM requests per evaluation sweep point; must be
+          positive.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p38_evaluation_max_tokens:
+        defaultValue: 256.0
+        description: Maximum tokens generated per evaluation request; must be positive.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p39_evaluation_temperature:
+        defaultValue: 0.0
+        description: Sampling temperature passed to GuideLLM. ``0`` is deterministic.
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      p40_evaluation_num_speculative_tokens:
+        defaultValue: 5.0
+        description: Draft tokens proposed per step in evaluation and serving.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p41_evaluation_gpu_memory_utilization:
+        defaultValue: 0.9
+        description: 'GPU memory fraction for evaluation and serving, greater than
+          ``0`` and
+
+          at most ``1.0``.'
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      p42_evaluation_startup_timeout_seconds:
+        defaultValue: 900.0
+        description: Maximum wait for the evaluation vLLM server to become ready.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p43_model_registry_address:
+        defaultValue: ''
+        description: 'Model Registry hostname. Enter only the host, not the scheme
+          or API path. Its
+
+          default is empty, which skips registration.'
+        isOptional: true
+        parameterType: STRING
+      p44_model_registry_port:
+        defaultValue: 8080.0
+        description: HTTP REST service port copied from the Model Registry URL; ``8080``
+          is common.
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      p45_model_registry_name:
+        defaultValue: speculator-online-draft
+        description: Name assigned to the registered draft model; use a unique name
+          in the registry.
+        isOptional: true
+        parameterType: STRING
+      p46_model_registry_version:
+        defaultValue: 1.0.0
+        description: Version label for this registration. Use a new value for each
+          revision.
+        isOptional: true
+        parameterType: STRING
+      p47_serving_endpoint_name:
+        defaultValue: speculator-online
+        description: DNS-compatible name for the KServe InferenceService.
+        isOptional: true
+        parameterType: STRING
+      p48_serving_runtime_image:
+        defaultValue: registry.redhat.io/rhaii-fast/vllm-cuda-rhel9@sha256:97c7d6f66f3f0897b3ff10ddd135de930d45bdd116cf41a43e3ad7270029116a
+        description: 'Pinned compatible vLLM CUDA image pull spec used by KServe;
+          override only with a
+
+          compatible image.'
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-download-model:
+          pvcMount:
+          - componentInputParameter: p01_persistent_pvc
+            mountPath: /mnt/persistent
+            pvcNameParameter:
+              componentInputParameter: p01_persistent_pvc
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: HF_TOKEN
+            optional: true
+            secretName: hf-token
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-token
+        exec-evaluate-draft-model:
+          imagePullPolicy: IfNotPresent
+          pvcMount:
+          - componentInputParameter: p01_persistent_pvc
+            mountPath: /mnt/persistent
+            pvcNameParameter:
+              componentInputParameter: p01_persistent_pvc
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: HF_TOKEN
+            optional: true
+            secretName: hf-token
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-token
+        exec-kubeflow-model-registry:
+          imagePullPolicy: IfNotPresent
+          pvcMount:
+          - componentInputParameter: p01_persistent_pvc
+            mountPath: /mnt/persistent
+            pvcNameParameter:
+              componentInputParameter: p01_persistent_pvc
+        exec-online-draft-model-training:
+          imagePullPolicy: IfNotPresent
+          pvcMount:
+          - componentInputParameter: p01_persistent_pvc
+            mountPath: /mnt/persistent
+            pvcNameParameter:
+              componentInputParameter: p01_persistent_pvc
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: KUBERNETES_SERVER_URL
+              secretKey: KUBERNETES_SERVER_URL
+            - envVar: KUBERNETES_AUTH_TOKEN
+              secretKey: KUBERNETES_AUTH_TOKEN
+            optional: false
+            secretName: kubernetes-credentials
+            secretNameParameter:
+              runtimeValue:
+                constant: kubernetes-credentials
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: HF_TOKEN
+            optional: true
+            secretName: hf-token
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-token
+        exec-speculative-decoding-serving:
+          imagePullPolicy: IfNotPresent
+          pvcMount:
+          - componentInputParameter: p01_persistent_pvc
+            mountPath: /mnt/persistent
+            pvcNameParameter:
+              componentInputParameter: p01_persistent_pvc
+    pipelineConfig:
+      workspace:
+        kubernetes:
+          pvcSpecPatch:
+            accessModes:
+            - ReadWriteMany
+            storageClassName: nfs-csi
+        size: 200Gi

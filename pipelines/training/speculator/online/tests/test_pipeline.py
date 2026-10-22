@@ -111,15 +111,15 @@ def test_pipeline_compiles_as_a_single_online_trainer_job(tmp_path):
     assert sorted(pipeline_spec["root"]["inputDefinitions"]["parameters"]) == PUBLIC_INPUTS
     tasks = pipeline_spec["root"]["dag"]["tasks"]
     assert "download-model" in tasks
-    assert "online-speculator" in tasks
+    assert "online-draft-model-training" in tasks
     assert "evaluate-draft-model" in tasks
     assert "kubeflow-model-registry" in tasks
     assert "speculative-decoding-serving" in tasks
     assert "extract-hidden-states" not in tasks
     assert "train-draft-model" not in tasks
 
-    assert "download-model" in tasks["online-speculator"]["dependentTasks"]
-    assert "online-speculator" in tasks["evaluate-draft-model"]["dependentTasks"]
+    assert "download-model" in tasks["online-draft-model-training"]["dependentTasks"]
+    assert "online-draft-model-training" in tasks["evaluate-draft-model"]["dependentTasks"]
     assert "evaluate-draft-model" in tasks["kubeflow-model-registry"]["dependentTasks"]
     assert "kubeflow-model-registry" in tasks["speculative-decoding-serving"]["dependentTasks"]
 
@@ -127,7 +127,7 @@ def test_pipeline_compiles_as_a_single_online_trainer_job(tmp_path):
     assert download_inputs["download_enabled"]["componentInputParameter"] == "p04_download_model"
     assert download_inputs["existing_model_path"]["componentInputParameter"] == "p03_verifier_model_pvc"
 
-    online_inputs = tasks["online-speculator"]["inputs"]["parameters"]
+    online_inputs = tasks["online-draft-model-training"]["inputs"]["parameters"]
     assert online_inputs["verifier_model"]["componentInputParameter"] == "p02_verifier_model"
     assert online_inputs["verifier_model_pvc"]["componentInputParameter"] == "p03_verifier_model_pvc"
     assert online_inputs["download_model"]["componentInputParameter"] == "p04_download_model"
