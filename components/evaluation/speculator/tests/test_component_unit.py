@@ -10,19 +10,19 @@ from ..component import (
     _prepare_local_evaluation_dataset,
     _resolve_evaluation_dataset_path,
     _run_upstream_evaluate,
-    evaluate_speculator,
+    evaluate_draft_model,
 )
 
 
 def test_component_function_exists():
     """The component is exposed as a KFP Python function."""
-    assert callable(evaluate_speculator)
-    assert hasattr(evaluate_speculator, "python_func")
+    assert callable(evaluate_draft_model)
+    assert hasattr(evaluate_draft_model, "python_func")
 
 
 def test_component_has_upstream_evaluation_parameters():
     """The component exposes endpoint, dataset, sweep, and model controls."""
-    params = inspect.signature(evaluate_speculator.python_func).parameters
+    params = inspect.signature(evaluate_draft_model.python_func).parameters
     for name in (
         "output_metrics",
         "output_results",
@@ -43,7 +43,7 @@ def test_component_has_upstream_evaluation_parameters():
 
 def test_component_defaults_match_upstream_example():
     """The request cap matches the upstream HumanEval example."""
-    params = inspect.signature(evaluate_speculator.python_func).parameters
+    params = inspect.signature(evaluate_draft_model.python_func).parameters
     assert params["evaluation_max_samples"].default == 80
     assert params["evaluation_max_tokens"].default == 256
     assert params["evaluation_temperature"].default == 0.0
@@ -179,7 +179,7 @@ def test_upstream_evaluation_timeout_raises_clear_error(monkeypatch):
 
 def test_component_uses_upstream_script_and_no_custom_baseline_loop():
     """The component launches one speculative endpoint and delegates evaluation upstream."""
-    source = inspect.getsource(evaluate_speculator.python_func)
+    source = inspect.getsource(evaluate_draft_model.python_func)
     assert "_download_upstream_evaluator" in source
     assert "_build_upstream_evaluate_command" in source
     assert "_run_upstream_evaluate" in source
@@ -191,7 +191,7 @@ def test_component_uses_upstream_script_and_no_custom_baseline_loop():
 
 def test_component_checks_vllm_binary():
     """The component reports a clear error when vLLM is unavailable."""
-    source = inspect.getsource(evaluate_speculator.python_func)
+    source = inspect.getsource(evaluate_draft_model.python_func)
     assert 'shutil.which("vllm")' in source
     assert "vllm binary not found" in source
 

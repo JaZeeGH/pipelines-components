@@ -102,16 +102,16 @@ def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_p
     pipeline_inputs = pipeline_spec["root"]["inputDefinitions"]["parameters"]
     assert list(pipeline_inputs) == PUBLIC_INPUTS
     tasks = pipeline_spec["root"]["dag"]["tasks"]
-    assert tasks["train-speculator-mode"]["taskInfo"]["name"] == "train-speculator-mode"
-    assert tasks["evaluate-speculator"]["taskInfo"]["name"] == "evaluate-speculator"
-    assert tasks["evaluate-speculator"]["cachingOptions"].get("enableCache", False) is False
+    assert tasks["train-draft-model"]["taskInfo"]["name"] == "train-draft-model"
+    assert tasks["evaluate-draft-model"]["taskInfo"]["name"] == "evaluate-draft-model"
+    assert tasks["evaluate-draft-model"]["cachingOptions"].get("enableCache", False) is False
     assert "model-registry==0.3.9" in compiled_pipeline
     assert "model-registry==0.3.4" not in compiled_pipeline
-    assert "train-speculator-mode" in tasks["evaluate-speculator"]["dependentTasks"]
-    assert "evaluate-speculator" in tasks["kubeflow-model-registry"]["dependentTasks"]
+    assert "train-draft-model" in tasks["evaluate-draft-model"]["dependentTasks"]
+    assert "evaluate-draft-model" in tasks["kubeflow-model-registry"]["dependentTasks"]
     assert "kubeflow-model-registry" in tasks["speculative-decoding-serving"]["dependentTasks"]
 
-    evaluation_component_name = tasks["evaluate-speculator"]["componentRef"]["name"]
+    evaluation_component_name = tasks["evaluate-draft-model"]["componentRef"]["name"]
     evaluation_executor_label = pipeline_spec["components"][evaluation_component_name]["executorLabel"]
     evaluation_kubernetes_config = platform_spec["platforms"]["kubernetes"]["deploymentSpec"]["executors"][
         evaluation_executor_label
@@ -122,13 +122,13 @@ def test_pipeline_compiles_and_orders_training_evaluation_registry_serving(tmp_p
     assert all(secret["optional"] is True for secret in evaluation_secrets)
     assert {key_to_env["envVar"] for secret in evaluation_secrets for key_to_env in secret["keyToEnv"]} == {"HF_TOKEN"}
 
-    train_inputs = tasks["train-speculator-mode"]["inputs"]["parameters"]
+    train_inputs = tasks["train-draft-model"]["inputs"]["parameters"]
     assert train_inputs["persistent_pvc"]["componentInputParameter"] == "p01_persistent_pvc"
     assert train_inputs["hidden_states_path"]["componentInputParameter"] == "p09_hidden_states_path"
     assert train_inputs["training_data_path"]["componentInputParameter"] == "p08_training_data_path"
     assert train_inputs["training_ttt_steps"]["componentInputParameter"] == "p18_training_test_time_steps"
 
-    evaluation_inputs = tasks["evaluate-speculator"]["inputs"]["parameters"]
+    evaluation_inputs = tasks["evaluate-draft-model"]["inputs"]["parameters"]
     assert evaluation_inputs["evaluation_dataset_pvc"]["componentInputParameter"] == "p01_persistent_pvc"
     assert evaluation_inputs["evaluation_dataset_uri"]["componentInputParameter"] == "p07_evaluation_dataset_uri"
     assert (

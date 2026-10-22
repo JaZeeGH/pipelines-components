@@ -241,7 +241,7 @@ def _run_upstream_evaluate(command: list[str], environment: dict[str, str], time
         _run_upstream_evaluate,
     ],
 )
-def evaluate_speculator(
+def evaluate_draft_model(
     output_metrics: dsl.Output[dsl.Metrics],
     output_results: dsl.Output[dsl.Artifact],
     verifier_model: str,

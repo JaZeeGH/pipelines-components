@@ -7,7 +7,7 @@ from kfp import dsl
 from components.data_processing.download_model import download_model as download_model_component
 from components.deployment.kubeflow_model_registry import kubeflow_model_registry
 from components.deployment.speculative_decoding_serving import speculative_decoding_serving
-from components.evaluation.speculator import evaluate_speculator
+from components.evaluation.speculator import evaluate_draft_model
 from components.training.finetuning.speculator import online_speculator
 
 PVC_SIZE = "200Gi"
@@ -426,7 +426,7 @@ def speculator_online_pipeline(
     _attach_trainer_credentials(online_task)
     _attach_hf_token(online_task)
 
-    evaluation_task = evaluate_speculator(
+    evaluation_task = evaluate_draft_model(
         verifier_model=download_task.output,
         draft_model_path="/mnt/persistent/final_model",
         evaluation_dataset_uri=evaluation_dataset_uri,

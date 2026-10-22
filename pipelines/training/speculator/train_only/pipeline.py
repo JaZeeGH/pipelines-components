@@ -6,8 +6,8 @@ from kfp import dsl
 
 from components.deployment.kubeflow_model_registry import kubeflow_model_registry
 from components.deployment.speculative_decoding_serving import speculative_decoding_serving
-from components.evaluation.speculator import evaluate_speculator
-from components.training.finetuning.speculator import train_speculator_mode
+from components.evaluation.speculator import evaluate_draft_model
+from components.training.finetuning.speculator import train_draft_model
 
 PVC_SIZE = "200Gi"
 PVC_STORAGE_CLASS = "nfs-csi"
@@ -251,7 +251,7 @@ def speculator_training_pipeline(
     model_registry_port = p45_model_registry_port
     model_registry_version = p46_model_registry_version
     serving_runtime_image = p47_serving_runtime_image
-    train_task = train_speculator_mode(
+    train_task = train_draft_model(
         verifier_model=verifier_model_pvc,
         verifier_model_pvc=verifier_model_pvc,
         output_dir=output_dir,
@@ -291,7 +291,7 @@ def speculator_training_pipeline(
     kfp.kubernetes.mount_pvc(train_task, pvc_name=persistent_pvc, mount_path="/mnt/persistent")
     _attach_k8s(train_task)
 
-    evaluation_task = evaluate_speculator(
+    evaluation_task = evaluate_draft_model(
         verifier_model=verifier_model_pvc,
         draft_model_path="/mnt/persistent/final_model",
         evaluation_dataset_uri=evaluation_dataset_uri,

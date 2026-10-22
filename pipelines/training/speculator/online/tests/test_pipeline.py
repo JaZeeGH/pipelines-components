@@ -112,15 +112,15 @@ def test_pipeline_compiles_as_a_single_online_trainer_job(tmp_path):
     tasks = pipeline_spec["root"]["dag"]["tasks"]
     assert "download-model" in tasks
     assert "online-speculator" in tasks
-    assert "evaluate-speculator" in tasks
+    assert "evaluate-draft-model" in tasks
     assert "kubeflow-model-registry" in tasks
     assert "speculative-decoding-serving" in tasks
     assert "extract-hidden-states" not in tasks
-    assert "train-speculator-mode" not in tasks
+    assert "train-draft-model" not in tasks
 
     assert "download-model" in tasks["online-speculator"]["dependentTasks"]
-    assert "online-speculator" in tasks["evaluate-speculator"]["dependentTasks"]
-    assert "evaluate-speculator" in tasks["kubeflow-model-registry"]["dependentTasks"]
+    assert "online-speculator" in tasks["evaluate-draft-model"]["dependentTasks"]
+    assert "evaluate-draft-model" in tasks["kubeflow-model-registry"]["dependentTasks"]
     assert "kubeflow-model-registry" in tasks["speculative-decoding-serving"]["dependentTasks"]
 
     download_inputs = tasks["download-model"]["inputs"]["parameters"]
@@ -150,7 +150,7 @@ def test_evaluation_and_serving_share_performance_inputs_and_fixed_seed(tmp_path
     pipeline_spec, _ = _load_pipeline_documents(output_path)
     tasks = pipeline_spec["root"]["dag"]["tasks"]
 
-    evaluation_inputs = tasks["evaluate-speculator"]["inputs"]["parameters"]
+    evaluation_inputs = tasks["evaluate-draft-model"]["inputs"]["parameters"]
     assert evaluation_inputs["evaluation_num_speculative_tokens"]["componentInputParameter"] == (
         "p40_evaluation_num_speculative_tokens"
     )
@@ -173,7 +173,7 @@ def test_evaluation_requests_gpu_accelerator(tmp_path):
     output_path = tmp_path / "speculator_online.yaml"
     _compile_pipeline(output_path)
     pipeline_spec, platform_spec = _load_pipeline_documents(output_path)
-    component_name = pipeline_spec["root"]["dag"]["tasks"]["evaluate-speculator"]["componentRef"]["name"]
+    component_name = pipeline_spec["root"]["dag"]["tasks"]["evaluate-draft-model"]["componentRef"]["name"]
     executor_label = pipeline_spec["components"][component_name]["executorLabel"]
     component_executor = pipeline_spec["deploymentSpec"]["executors"][executor_label]
     platform_executor = platform_spec["platforms"]["kubernetes"]["deploymentSpec"]["executors"][executor_label]
