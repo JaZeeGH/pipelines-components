@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def _pvc_parts(uri: str) -> tuple[str | None, str]:
@@ -96,6 +97,23 @@ def _validate_vllm_configuration(vllm_source: str | None, vllm_endpoint: str | N
     if source == "managed" and endpoint is not None:
         raise ValueError("vllm_endpoint must be omitted when vllm_source='managed'")
     return endpoint
+
+
+def _resolve_pip_index_urls(configured_urls: str | None, env: dict[str, str]) -> list[str] | None:
+    """Resolve pip indexes while rejecting URLs that embed credentials."""
+    if configured_urls:
+        urls = [url.strip() for url in configured_urls.split(",") if url.strip()]
+    else:
+        index_url = env.get("PIP_INDEX_URL", "").strip()
+        urls = [index_url] if index_url else []
+
+    extra_index_urls = env.get("PIP_EXTRA_INDEX_URL", "").split()
+    for url in [*urls, *extra_index_urls]:
+        parsed_url = urlsplit(url)
+        if parsed_url.username or parsed_url.password or parsed_url.query or parsed_url.fragment:
+            raise ValueError("Pip index URLs must not embed credentials or query tokens; use Secret-backed auth.")
+
+    return urls or None
 
 
 def run_speculator(mode: str, values: dict[str, Any]) -> str:
@@ -228,7 +246,8 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
 
     log.info("Initializing Speculator %s mode", mode)
     api = init_k8s(log)
-    cache_root = os.path.join(pvc_path, ".cache", "huggingface")
+    # KFP's workspace mount is not available in Trainer workers; use writable temp storage.
+    cache_root = "/tmp/.cache/huggingface"
     default_env = {
         "XDG_CACHE_HOME": "/tmp",
         "TRITON_CACHE_DIR": "/tmp/.triton",
@@ -311,10 +330,12 @@ def run_speculator(mode: str, values: dict[str, Any]) -> str:
             "metrics_port": values["metrics_port"],
             "metrics_poll_interval_seconds": values["metrics_poll_interval_seconds"],
         }
+        params["env"] = env
         if values.get("packages_to_install"):
             params["packages_to_install"] = [x.strip() for x in values["packages_to_install"].split(",")]
-        if values.get("pip_index_urls"):
-            params["pip_index_urls"] = [x.strip() for x in values["pip_index_urls"].split(",")]
+        pip_index_urls = _resolve_pip_index_urls(values.get("pip_index_urls"), env)
+        if pip_index_urls:
+            params["pip_index_urls"] = pip_index_urls
         if mode == "data_only":
             params["dataset_name"] = values["dataset_name"]
             if values.get("data_extraction_max_samples") is not None:

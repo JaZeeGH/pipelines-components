@@ -10,8 +10,8 @@ _SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "shared")
 
 @dsl.component(
     base_image=(
-        "quay.io/opendatahub/odh-th-torch-cuda-py312:odh-3.6-ea.1@"
-        "sha256:9ad2d72ebe892dffd3554eeb81e2a47c9fcf0d97f89ed261d48f4e8bbc367b4b"
+        "registry.redhat.io/rhoai/odh-th-torch-cuda-py312-rhel9@"
+        "sha256:edd92fa1b4759ad93ef3e93d221a9817e0582ed9391d56763f9e30e619679e31"
     ),
     packages_to_install=["kfp==2.17.0", "kubernetes", "olot"],
     install_kfp_package=False,
@@ -71,11 +71,63 @@ def online_speculator(
     pip_index_urls: Optional[str] = None,
     training_envs: str = "",
     training_runtime: str = "vllm-extract-cuda",
+    download_model: bool = False,
     output_model: dsl.Output[dsl.Model] = None,
     output_metrics: dsl.Output[dsl.Metrics] = None,
     kubernetes_config: dsl.TaskConfig = None,
-) -> str:
+):
     """Extract and train a draft model with a managed vLLM sidecar."""
+    from pathlib import Path
+
+    def resolve_local_dataset_path(dataset_uri: str) -> str:
+        if not dataset_uri:
+            return dataset_uri
+
+        if dataset_uri.startswith("pvc://"):
+            claim, separator, dataset_path = dataset_uri.removeprefix("pvc://").partition("/")
+            if not claim or not separator or not dataset_path:
+                raise ValueError("PVC dataset URIs must use pvc://<claim>/<path>")
+            requested_path = Path(dataset_path)
+            if claim != persistent_pvc:
+                if requested_path.is_absolute() or ".." in requested_path.parts:
+                    raise ValueError("PVC dataset paths must remain relative")
+                if requested_path.suffix.lower() not in {".json", ".jsonl"}:
+                    raise ValueError("dataset files on the shared PVC must end in .json or .jsonl")
+                return dataset_uri
+        elif "://" in dataset_uri:
+            return dataset_uri
+
+        else:
+            candidate = Path(dataset_uri)
+            if candidate.suffix.lower() not in {".json", ".jsonl"}:
+                return dataset_uri
+            dataset_path = dataset_uri
+
+        if not persistent_pvc:
+            raise ValueError("persistent_pvc is required for local JSON/JSONL dataset paths")
+
+        pvc_root = Path(persistent_mount_path).resolve()
+        candidate = Path(dataset_path)
+        candidate = candidate if candidate.is_absolute() else pvc_root / candidate
+        resolved = candidate.resolve()
+        try:
+            relative_path = resolved.relative_to(pvc_root)
+        except ValueError as exc:
+            raise ValueError("local dataset paths must remain within persistent_mount_path") from exc
+
+        if not relative_path.parts:
+            raise ValueError("dataset path must be a JSON or JSONL file under persistent_mount_path")
+        if relative_path.suffix.lower() not in {".json", ".jsonl"}:
+            raise ValueError("dataset files on the shared PVC must end in .json or .jsonl")
+        if not resolved.is_file():
+            raise FileNotFoundError(f"dataset file not found on persistent_pvc: {resolved}")
+
+        return f"pvc://{persistent_pvc}/{relative_path.as_posix()}"
+
+    if verifier_model_pvc and not download_model:
+        verifier_model = verifier_model_pvc
+    dataset_name = resolve_local_dataset_path(dataset_name)
+
     from speculator import run_speculator
 
-    return run_speculator("online", locals())
+    run_speculator("online", locals())

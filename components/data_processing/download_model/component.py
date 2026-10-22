@@ -18,6 +18,7 @@ def download_model(
     model_cache_pvc: str,
     model_cache_mount: str = "/mnt/models",
     download_enabled: bool = True,
+    existing_model_path: str = "",
 ) -> str:
     """Download a HuggingFace model to a PVC for caching.
 
@@ -28,6 +29,7 @@ def download_model(
         model_cache_pvc: Name of the PVC to store models (unused here, mounted via pipeline).
         model_cache_mount: Mount path for the model cache PVC.
         download_enabled: If False, return the expected model directory without downloading.
+        existing_model_path: Existing PVC-relative path or pvc:// URI returned when downloads are disabled.
 
     Returns:
         The PVC sub-path where the model is stored.
@@ -39,6 +41,9 @@ def download_model(
     model_dir_name = model_name.replace("/", "--")
     model_path = os.path.join(model_cache_mount, model_dir_name)
     if not download_enabled:
+        if existing_model_path.strip():
+            print(f"Model download disabled; using existing model path {existing_model_path}.")
+            return existing_model_path.strip()
         print(f"Model download disabled; expected model path is {model_path}.")
         return model_dir_name
     sentinel = os.path.join(model_path, ".download_complete")

@@ -20,10 +20,22 @@ def test_component_signature():
     """Verify the component exposes the expected input parameters."""
     spec = download_model.component_spec
     input_names = set(spec.inputs.keys())
-    assert input_names == {"model_name", "model_cache_pvc", "model_cache_mount", "download_enabled"}
+    assert input_names == {
+        "model_name",
+        "model_cache_pvc",
+        "model_cache_mount",
+        "download_enabled",
+        "existing_model_path",
+    }
 
 
-def _run_download(tmp_path, model_name="mistralai/Mistral-7B", pre_cached=False, download_enabled=True):
+def _run_download(
+    tmp_path,
+    model_name="mistralai/Mistral-7B",
+    pre_cached=False,
+    download_enabled=True,
+    existing_model_path="",
+):
     """Invoke download_model.python_func with huggingface_hub mocked via sys.modules."""
     model_dir_name = model_name.replace("/", "--")
     model_path = tmp_path / model_dir_name
@@ -46,6 +58,7 @@ def _run_download(tmp_path, model_name="mistralai/Mistral-7B", pre_cached=False,
             model_cache_pvc="my-pvc",
             model_cache_mount=str(tmp_path),
             download_enabled=download_enabled,
+            existing_model_path=existing_model_path,
         )
 
     return result, mock_hf, model_path
@@ -90,3 +103,17 @@ def test_download_can_be_disabled(tmp_path):
     assert result == "mistralai--Mistral-7B"
     mock_hf.snapshot_download.assert_not_called()
     assert not model_path.exists()
+
+
+def test_disabled_download_returns_existing_model_path(tmp_path):
+    """A PVC path is passed through when model downloads are disabled."""
+    existing_path = "pvc://my-pvc/models/verifier"
+    result, mock_hf, _ = _run_download(
+        tmp_path,
+        model_name="",
+        download_enabled=False,
+        existing_model_path=existing_path,
+    )
+
+    assert result == existing_path
+    mock_hf.snapshot_download.assert_not_called()
